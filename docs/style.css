@@ -133,3 +133,7 @@ dialog::backdrop{background:rgba(0,0,0,.65)}
 .demo-bar a{color:#5eead4;text-decoration:underline}
 .tile .vid canvas,.player canvas{width:100%;height:100%;object-fit:contain;display:block;background:#05080a}
 .player canvas{max-height:68vh}
+.credit{margin-top:auto;padding:10px;font-size:.8rem;color:var(--muted);line-height:1.6}
+.credit a{color:var(--accent)}
+.side-foot{margin-top:0}
+@media (max-width:820px){.credit{display:none}}

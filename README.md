@@ -2,6 +2,8 @@
 
 A small dashboard for testing computer vision models on live RTSP streams and recorded video.
 
+Part of the portfolio of [Maidul Hasan Masum](https://mh-masum6875.github.io).
+
 **Try it in your browser (no install): https://mh-masum6875.github.io/cv-test-bench/**
 The hosted version runs entirely in your browser, with sample footage, your own video files, your
 webcam or an HLS link, and two built-in detectors (motion and COCO-SSD). Nothing is uploaded.
