@@ -32,6 +32,14 @@ Or with Docker: `docker build -t cv-test-bench . && docker run -p 8000:8000 -v $
 The app listens on `127.0.0.1` by default. Set `HOST=0.0.0.0` to reach it from other machines,
 and put it behind a login or VPN first, because it has no user accounts.
 
+## What is in the hosted site
+
+* **Test Bench** (`/`): projects, cameras, analytics, zones, alert rules. Four **Example** projects mirror areas from my
+  applied computer vision work (workplace safety, traffic, retail, counting) using open YOLO models.
+* **CV Lab** (`/lab/`): eight tasks on a sample picture, your own file or your webcam: object detection, classification,
+  face detection, face landmarks, hand tracking, gestures, pose estimation and segmentation.
+* Credits and licences for the open models and sample footage are in [NOTICE.md](NOTICE.md).
+
 ## Try it without a camera
 
 ```bash

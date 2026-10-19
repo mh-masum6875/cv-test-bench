@@ -8,7 +8,9 @@
   const COLORS = ['#2ebeaa', '#3c8cfa', '#faaa3c', '#c85adc', '#5ac85a', '#5050f0'];
   const MODELS = [
     { id: 1, name: 'Motion detector (in browser)', kind: 'motion', path: '', notes: 'Background subtraction in JavaScript. Needs no weights.' },
-    { id: 2, name: 'COCO-SSD (in browser, 80 everyday objects)', kind: 'cocossd', path: '', notes: 'TensorFlow.js SSD MobileNet. Loads once, about 14 MB, then runs offline.' }
+    { id: 2, name: 'COCO-SSD (in browser, 80 everyday objects)', kind: 'cocossd', path: '', notes: 'TensorFlow.js SSD MobileNet. Loads once, about 14 MB, then runs offline.' },
+    { id: 3, name: 'YOLOv8n (in browser, 80 everyday classes)', kind: 'yolo', path: 'models/yolo/yolov8n-416.onnx', names: 'models/yolo/coco-names.json', notes: 'Ultralytics YOLOv8 nano, COCO classes, ONNX at 416 pixels. AGPL-3.0.' },
+    { id: 4, name: 'YOLOv8n Open Images (in browser, 601 classes)', kind: 'yolo', path: 'models/yolo/yolov8n-oiv7-416.onnx', names: 'models/yolo/oiv7-names.json', notes: 'Ultralytics YOLOv8 nano trained on Open Images V7. Knows helmets, boats, hats, bottles and many more. AGPL-3.0.' }
   ];
   const FILES = {};            // uploaded videos live in memory only
   const runners = {};
@@ -26,6 +28,27 @@
       alerts: [] };
     return s;
   }
+  /* Ready-made examples that mirror the areas in my applied computer vision repositories.
+     They use open YOLO models and CC BY 4.0 sample footage, so they show the idea, not my client models. */
+  function addPresets() {
+    if (S.presets === 2) return;
+    const t = Date.now() / 1000, rule = (o) => ({ ...DEFAULT_RULE, ...o });
+    const mk = (name, description, camName, sample, an) => {
+      const p = { id: nid('p'), name, description, created_at: t }; S.projects.push(p);
+      const c = { id: nid('c'), project_id: p.id, name: camName, source_type: 'sample', source: 'samples/' + sample, enabled: 0, fps_limit: 4, created_at: t }; S.cameras.push(c);
+      an.forEach(a => S.analytics.push({ id: nid('a'), camera_id: c.id, enabled: 1, webhook_url: '', created_at: t, classes: [], roi: [], ...a, rule: rule(a.rule) }));
+    };
+    mk('Example: Workplace safety', 'Raise an alert when a person walks into a marked floor zone. Press Start on the camera. The detector is YOLOv8n from Ultralytics. Checking hard hats needs a dedicated PPE model, which the server version can load.',
+      'Warehouse floor', 'safety', [{ name: 'Person in the marked zone', model_id: 3, conf: 0.35, classes: ['person'], roi: [[0.06, 0.34], [0.58, 0.2], [0.93, 0.58], [0.5, 0.98], [0.02, 0.8]], rule: { min_seconds: 1, cooldown_seconds: 8, severity: 'critical' } }]);
+    mk('Example: Traffic', 'Warn when the road is busy: two or more vehicles in view for a couple of seconds. Cars, trucks, buses and motorbikes are counted.',
+      'Road from above', 'traffic', [{ name: 'Busy road', model_id: 3, conf: 0.3, classes: ['car', 'truck', 'bus', 'motorcycle'], rule: { count: 2, min_seconds: 2, cooldown_seconds: 10, severity: 'warning' } }]);
+    mk('Example: Retail', 'Notice a customer who stays in an aisle. An info alert fires when a person is in the aisle for several seconds.',
+      'Shop aisle', 'retail', [{ name: 'Customer in the aisle', model_id: 3, conf: 0.3, classes: ['person'], rule: { min_seconds: 3, cooldown_seconds: 15, severity: 'info' } }]);
+    mk('Example: Sorting and counting', 'Count items on a table. This one counts bottles, the same idea as counting recyclables or products on a line.',
+      'Table', 'bottles', [{ name: 'Two or more bottles', model_id: 3, conf: 0.3, classes: ['bottle'], rule: { count: 2, min_seconds: 1, cooldown_seconds: 10, severity: 'info' } }]);
+    S.presets = 2; save();
+  }
+
   function load() { try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && s.v === 1) return s; } catch (e) { } return seed(); }
   function save() {
     for (let i = 0; i < 4; i++) {
@@ -111,6 +134,61 @@
     get loading() { return !this.model && !this.error; }
   }
 
+  /* YOLOv8 through onnxruntime-web (WebAssembly). Output layout: [1, 4 + classes, anchors]. */
+  let ortPromise = null;
+  function loadOrt() {
+    if (!ortPromise) ortPromise = (async () => {
+      await loadScript('vendor/ort/ort.wasm.min.js');
+      window.ort.env.wasm.wasmPaths = new URL('vendor/ort/', location.href).href;
+      window.ort.env.wasm.numThreads = 1;                    // GitHub Pages cannot send the headers that threads need
+      return window.ort;
+    })();
+    return ortPromise;
+  }
+  const sessions = {};
+  class Yolo {
+    constructor(model) {
+      this.model = model; this.size = 416; this.error = null; this.session = null; this.names = null;
+      this.c = document.createElement('canvas'); this.c.width = this.c.height = this.size; this.g = this.c.getContext('2d', { willReadFrequently: true });
+      if (!sessions[model.path]) sessions[model.path] = (async () => {
+        const ort = await loadOrt();
+        const [s, names] = await Promise.all([ort.InferenceSession.create(model.path, { executionProviders: ['wasm'] }), fetch(model.names).then(r => r.json())]);
+        return { s, names };
+      })();
+      sessions[model.path].then(x => { this.session = x.s; this.names = x.names; }).catch(e => { this.error = e.message || String(e); delete sessions[model.path]; });
+    }
+    get loading() { return !this.session && !this.error; }
+    async detect(src, w, h, conf) {
+      if (this.error) throw new Error(this.error);
+      if (!this.session) return [];
+      const S = this.size, k = Math.min(S / w, S / h), nw = Math.round(w * k), nh = Math.round(h * k), dx = (S - nw) / 2, dy = (S - nh) / 2;
+      this.g.fillStyle = '#727272'; this.g.fillRect(0, 0, S, S); this.g.drawImage(src, dx, dy, nw, nh);
+      const px = this.g.getImageData(0, 0, S, S).data, area = S * S, input = new Float32Array(3 * area);
+      for (let i = 0; i < area; i++) { input[i] = px[i * 4] / 255; input[area + i] = px[i * 4 + 1] / 255; input[2 * area + i] = px[i * 4 + 2] / 255; }
+      const out = await this.session.run({ [this.session.inputNames[0]]: new window.ort.Tensor('float32', input, [1, 3, S, S]) });
+      const t = out[this.session.outputNames[0]], N = t.dims[2], nc = t.dims[1] - 4, d = t.data, cand = [];
+      for (let i = 0; i < N; i++) {
+        let best = 0, bs = 0;
+        for (let c = 0; c < nc; c++) { const v = d[(4 + c) * N + i]; if (v > bs) { bs = v; best = c; } }
+        if (bs < conf) continue;
+        const cx = d[i], cy = d[N + i], bw = d[2 * N + i], bh = d[3 * N + i];
+        cand.push({ label: this.names[best], cls: best, conf: Math.round(bs * 100) / 100, box: [(cx - bw / 2 - dx) / k, (cy - bh / 2 - dy) / k, (cx + bw / 2 - dx) / k, (cy + bh / 2 - dy) / k] });
+      }
+      cand.sort((a, b) => b.conf - a.conf);
+      const keep = [];
+      for (const c of cand) {                                 // greedy non-maximum suppression, per class
+        if (keep.length >= 60) break;
+        if (keep.every(o => o.cls !== c.cls || iou(o.box, c.box) < 0.45)) keep.push(c);
+      }
+      return keep.map(({ cls, ...rest }) => rest);
+    }
+  }
+  function iou(a, b) {
+    const x1 = Math.max(a[0], b[0]), y1 = Math.max(a[1], b[1]), x2 = Math.min(a[2], b[2]), y2 = Math.min(a[3], b[3]);
+    const inter = Math.max(0, x2 - x1) * Math.max(0, y2 - y1), u = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter;
+    return u > 0 ? inter / u : 0;
+  }
+
   function inside(box, poly, w, h) {
     if (!poly || poly.length < 3) return true;
     const cx = (box[0] + box[2]) / 2 / w, cy = (box[1] + box[3]) / 2 / h; let c = false;
@@ -139,7 +217,7 @@
       const c = this.cam, v = this.video;
       try {
         if (c.source_type === 'rtsp') throw new Error('Browsers cannot open RTSP. Run the server version, or republish the stream as HLS (for example with MediaMTX) and add the .m3u8 link here.');
-        if (c.source_type === 'sample') { v.src = v.canPlayType('video/webm; codecs="vp9"') ? 'samples/demo.webm' : 'samples/demo.mp4'; }
+        if (c.source_type === 'sample') { const base = /^samples\//.test(c.source) ? c.source : 'samples/demo'; v.src = base + (v.canPlayType('video/webm; codecs="vp9"') ? '.webm' : '.mp4'); }
         else if (c.source_type === 'file') { if (!FILES[c.id]) throw new Error('Browsers do not keep uploaded files between visits. Edit the camera and choose the file again.'); v.src = URL.createObjectURL(FILES[c.id]); }
         else if (c.source_type === 'webcam') { v.srcObject = await navigator.mediaDevices.getUserMedia({ video: { width: 1280 } }); v.loop = false; }
         else if (c.source_type === 'url') {
@@ -172,7 +250,7 @@
       this.analytics = S.analytics.filter(a => a.camera_id === this.id && a.enabled).map((row, i) => {
         const model = find(MODELS, row.model_id);
         const a = { row, color: COLORS[i % COLORS.length], state: new RuleState(), rule: row.rule, classes: row.classes.map(x => x.toLowerCase()), count: 0, infer_ms: 0, total: 0, labels: {}, history: [], dets: [], error: null, det: null };
-        try { if (!model) throw new Error('Model was deleted'); a.det = model.kind === 'cocossd' ? new Coco() : new Motion(); } catch (e) { a.error = e.message; }
+        try { if (!model) throw new Error('Model was deleted'); a.det = model.kind === 'cocossd' ? new Coco() : model.kind === 'yolo' ? new Yolo(model) : new Motion(); } catch (e) { a.error = e.message; }
         return a;
       });
       this.reloadFlag = false;
@@ -297,7 +375,7 @@
   R('POST', '/models', () => { throw err('Your own weights need the server version. This hosted demo runs in the browser, so it can only use the built-in models.', 400); });
   R('POST', '/models/upload', () => { throw err('Your own weights need the server version. This hosted demo runs in the browser, so it can only use the built-in models.', 400); });
   R('DELETE', '/models/(\\d+)', () => { throw err('The built-in models cannot be removed', 400); });
-  R('GET', '/models/(\\d+)/classes', m => { const md = find(MODELS, +m[1]); if (!md) throw err('Model not found', 404); return md.kind === 'motion' ? ['motion'] : COCO; });
+  R('GET', '/models/(\\d+)/classes', m => { const md = find(MODELS, +m[1]); if (!md) throw err('Model not found', 404); if (md.kind === 'motion') return ['motion']; if (md.kind === 'yolo') return fetch(md.names).then(r => r.json()); return COCO; });
   R('GET', '/default-rule', () => DEFAULT_RULE);
   const av = a => ({ ...a, enabled: !!a.enabled, rule: { ...DEFAULT_RULE, ...a.rule } });
   R('GET', '/cameras/(\\d+)/analytics', m => S.analytics.filter(a => a.camera_id === +m[1]).map(av));
@@ -332,6 +410,7 @@
   }
   requestAnimationFrame(paint);
 
+  addPresets();
   S.cameras.forEach(c => { if (c.enabled && c.source_type !== 'file' && c.source_type !== 'webcam') startRunner(c.id); });
   window.DemoBackend = {
     call,

@@ -195,6 +195,10 @@ function cameraForm(pid) {
   openModal('Add camera', `
     <div class="field"><label>Source</label><div class="seg" id="seg" style="flex-wrap:wrap">${types.map(([k, t], i) => `<button data-t="${k}" class="${i ? '' : 'on'}">${t}</button>`).join('')}</div></div>
     <div class="field"><label>Name</label><input id="f-name" placeholder="Gate camera"></div>
+    <div id="src-sample" class="field ${type === 'sample' ? '' : 'hidden'}"><label>Sample clip</label><select id="f-sample">
+      <option value="demo">Walking objects (simple test scene)</option><option value="safety">Warehouse floor with a marked zone</option><option value="traffic">Road seen from above</option>
+      <option value="retail">Shop aisle</option><option value="bottles">Bottles on a table</option><option value="people">People walking</option></select>
+      <div class="muted small" style="margin-top:6px">Clips from the Intel IoT DevKit sample videos, licensed CC BY 4.0.</div></div>
     <div id="src-file" class="field ${type === 'file' ? '' : 'hidden'}"><label>Video file (mp4, webm, avi, mkv...)</label><input type="file" id="f-file" accept="video/*"></div>
     <div id="src-url" class="field hidden"><label id="url-label">Stream URL</label><input id="f-url" placeholder="rtsp://user:password@192.168.1.20:554/stream1">
       <div class="row" style="margin-top:8px ${demo ? ';display:none' : ''}"><button class="btn small" id="test">Test connection</button><span id="test-out" class="small muted"></span></div></div>
@@ -203,6 +207,7 @@ function cameraForm(pid) {
     `<button class="btn" data-close>Cancel</button><button class="btn primary" id="save">Add camera</button>`);
   const sync = () => {
     $('#src-file').classList.toggle('hidden', type !== 'file');
+    $('#src-sample').classList.toggle('hidden', type !== 'sample');
     $('#src-url').classList.toggle('hidden', !(type === 'rtsp' || type === 'url'));
     $('#f-url').placeholder = type === 'url' ? 'https://example.com/live/stream.m3u8' : 'rtsp://user:password@192.168.1.20:554/stream1';
     $('#url-label').textContent = type === 'url' ? 'Link to the stream or video' : 'Stream URL';
@@ -227,7 +232,7 @@ function cameraForm(pid) {
         const fd = new FormData(); fd.append('name', name); fd.append('fps_limit', fps); fd.append('file', file);
         c = await api(`/projects/${pid}/cameras/upload`, { method: 'POST', form: fd });
       } else {
-        c = await api(`/projects/${pid}/cameras`, { method: 'POST', json: { name, source_type: type, source: type === 'rtsp' || type === 'url' ? $('#f-url').value : '', fps_limit: +fps } });
+        c = await api(`/projects/${pid}/cameras`, { method: 'POST', json: { name, source_type: type, source: type === 'rtsp' || type === 'url' ? $('#f-url').value : type === 'sample' ? 'samples/' + $('#f-sample').value : '', fps_limit: +fps } });
       }
       closeModal(); location.hash = '#/c/' + c.id;
     } catch (e) { fail(e); $('#save').disabled = false; $('#save').textContent = 'Add camera'; }
