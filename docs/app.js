@@ -400,20 +400,35 @@ async function analyticForm(cid, a) {
 /* ---------------------------------------------------------- models */
 async function pageModels() {
   models = await api('/models');
-  view.innerHTML = `<div class="top"><div><h1>Models</h1><p>Register the weights you want to test. Any Ultralytics YOLO file works (.pt, .onnx, .engine).</p></div>
+  view.innerHTML = `<div class="top"><div><h1>Models</h1><p>${MODE === 'demo' ? 'Add your own YOLO model as an ONNX file. It runs in your browser and stays on your computer.' : 'Register the weights you want to test. Any Ultralytics YOLO file works (.pt, .onnx, .engine).'}</p></div>
     <button class="btn primary" data-act="add-model">Add model</button></div>
     <div class="card tablewrap"><table><tr><th>Name</th><th>Type</th><th>File</th><th>Used by</th><th></th></tr>
-    ${models.map(m => `<tr><td><b>${esc(m.name)}</b><div class="muted small">${esc(m.notes)}</div></td><td>${m.kind === 'motion' || m.kind === 'cocossd' ? 'Built in' : 'Ultralytics'}</td>
-      <td class="mono small">${m.kind === 'motion' || m.kind === 'cocossd' ? '-' : esc(m.path) + (m.exists ? '' : ' (missing)')}</td><td>${m.in_use} analytic${m.in_use === 1 ? '' : 's'}</td>
-      <td style="text-align:right">${m.kind === 'motion' || m.kind === 'cocossd' ? '' : `<button class="btn small danger" data-act="del-model" data-id="${m.id}">Remove</button>`}</td></tr>`).join('')}</table></div>
+    ${models.map(m => `<tr><td><b>${esc(m.name)}</b><div class="muted small">${esc(m.notes)}</div></td><td>${m.builtin === false ? 'Yours (ONNX)' : m.kind === 'motion' || m.kind === 'cocossd' || m.builtin ? 'Built in' : 'Ultralytics'}</td>
+      <td class="mono small">${m.builtin === false ? esc(Math.round(m.bytes / 1e5) / 10 + ' MB, kept in this browser') : m.kind === 'motion' || m.kind === 'cocossd' ? '-' : esc(m.path) + (m.exists ? '' : ' (missing)')}</td><td>${m.in_use} analytic${m.in_use === 1 ? '' : 's'}</td>
+      <td style="text-align:right">${m.builtin === true || m.kind === 'motion' || m.kind === 'cocossd' ? '' : `<button class="btn small danger" data-act="del-model" data-id="${m.id}">Remove</button>`}</td></tr>`).join('')}</table></div>
     <p class="muted small" style="margin-top:14px">To add your own detector type, subclass <span class="mono">Detector</span> in <span class="mono">app/detectors.py</span> and register it in <span class="mono">build_detector</span>.</p>`;
   refreshSide();
 }
 function modelForm() {
   if (MODE === 'demo') {
-    openModal('Your own models need the server', `<p>This hosted demo runs entirely in your browser, so it can use the built-in detectors only.</p>
-      <p>To test your own YOLO weights (.pt, .onnx, .engine) on RTSP streams, download the server version. It is the same interface and takes a minute to start.</p>
-      <p><a class="btn primary" href="${REPO}" target="_blank" rel="noopener">Get the server version on GitHub</a></p>`);
+    openModal('Add your YOLO model', `
+      <p class="muted small" style="margin-top:0">Your model runs inside this page. The file is stored in your own browser and is never uploaded.
+      Export it as ONNX with a fixed square size, for example <span class="mono">yolo export model=best.pt format=onnx imgsz=640</span>.
+      Ultralytics detection models (YOLOv5u, YOLOv8, YOLO11) are supported. A .pt file cannot run in a browser, and models that already include NMS in the graph are not supported yet.</p>
+      <div class="field"><label>ONNX file (up to 300 MB)</label><input type="file" id="m-file" accept=".onnx"></div>
+      <div class="field"><label>Name</label><input id="m-name" placeholder="helmet-v3"></div>
+      <div class="field"><label>Class names, only if the file does not contain them (comma separated)</label><input id="m-names" placeholder="helmet, vest, person"></div>
+      <div class="field"><label>Notes</label><input id="m-notes" placeholder="Trained 12 Oct, 3 classes"></div>`,
+      `<button class="btn" data-close>Cancel</button><button class="btn primary" id="save">Add model</button>`);
+    $('#save').onclick = async () => {
+      const f = $('#m-file').files[0]; if (!f) { fail(new Error('Choose an .onnx file')); return; }
+      $('#save').disabled = true; $('#save').textContent = 'Checking the model...';
+      try {
+        const fd = new FormData(); fd.append('file', f); fd.append('name', $('#m-name').value); fd.append('names', $('#m-names').value); fd.append('notes', $('#m-notes').value);
+        const m = await api('/models/upload', { method: 'POST', form: fd });
+        closeModal(); toast('Model added', `${m.name}: ${m.names.length} classes. Pick it when you add an analytic.`); route();
+      } catch (e) { fail(e); $('#save').disabled = false; $('#save').textContent = 'Add model'; }
+    };
     return;
   }
   let mode = 'path';
@@ -479,7 +494,7 @@ async function initMode() {
   try { const r = await fetch('api/health'); if (r.ok && (await r.json()).ok) return; } catch (e) { }
   MODE = 'demo';
   try { await loadScript('demo.js'); } catch (e) { toast('Could not start', e.message, 'critical'); return; }
-  $('#demo-bar').innerHTML = `<b>Browser demo.</b> Everything runs in this page and nothing is uploaded. For RTSP streams and your own YOLO weights,
+  $('#demo-bar').innerHTML = `<b>Browser demo.</b> Everything runs in this page and nothing is uploaded. Add your own ONNX model on the Models page. For RTSP streams,
     <a href="${REPO}" target="_blank" rel="noopener">get the server version</a>. <a href="#" id="demo-reset">Reset demo data</a>`;
   $('#demo-bar').classList.remove('hidden');
   $('#demo-reset').onclick = e => { e.preventDefault(); if (confirm('Delete everything you added in this demo?')) window.DemoBackend.reset(); };

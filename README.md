@@ -7,7 +7,8 @@ Part of the portfolio of [Maidul Hasan Masum](https://mh-masum6875.github.io).
 **Try it in your browser (no install): https://mh-masum6875.github.io/cv-test-bench/**
 The hosted version runs entirely in your browser, with sample footage, your own video files, your
 webcam or an HLS link, and two built-in detectors (motion and COCO-SSD). Nothing is uploaded.
-For **RTSP streams and your own YOLO weights**, run the server version below. It is the same interface.
+You can add **your own YOLO model** (exported to ONNX) on the Models page. It runs in your browser and stays on your computer.
+For **RTSP streams** and `.pt` weights, run the server version below. It is the same interface.
 
 Create a **project**, add **cameras** (an RTSP URL or an uploaded video), attach one or more
 **analytics** to each camera (a model, a confidence threshold, an optional detection zone and an
@@ -36,6 +37,7 @@ and put it behind a login or VPN first, because it has no user accounts.
 
 * **Test Bench** (`/`): projects, cameras, analytics, zones, alert rules. Four **Example** projects mirror areas from my
   applied computer vision work (workplace safety, traffic, retail, counting) using open YOLO models.
+* **Your own model**: Models, Add model, choose an `.onnx` export (YOLOv5u, YOLOv8 or YOLO11 detection). It is stored in your browser only.
 * **CV Lab** (`/lab/`): eight tasks on a sample picture, your own file or your webcam: object detection, classification,
   face detection, face landmarks, hand tracking, gestures, pose estimation and segmentation.
 * Credits and licences for the open models and sample footage are in [NOTICE.md](NOTICE.md).

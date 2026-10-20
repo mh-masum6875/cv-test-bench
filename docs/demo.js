@@ -15,6 +15,8 @@
   const FILES = {};            // uploaded videos live in memory only
   const runners = {};
   let S = load();
+  if (!S.models) S.models = [];
+  const allModels = () => MODELS.concat(S.models);
 
   /* ---------- storage ---------- */
   function seed() {
@@ -134,7 +136,31 @@
     get loading() { return !this.model && !this.error; }
   }
 
-  /* YOLOv8 through onnxruntime-web (WebAssembly). Output layout: [1, 4 + classes, anchors]. */
+  /* ---------- models uploaded by the visitor: stored in this browser only (IndexedDB) ---------- */
+  const idb = () => new Promise((res, rej) => { const r = indexedDB.open('cvtb-models', 1); r.onupgradeneeded = () => r.result.createObjectStore('m', { keyPath: 'id' }); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+  const idbDo = async (mode, fn) => { const db = await idb(); return new Promise((res, rej) => { const tx = db.transaction('m', mode), req = fn(tx.objectStore('m')); tx.oncomplete = () => res(req && req.result); tx.onerror = () => rej(tx.error); }); };
+  const idbPut = rec => idbDo('readwrite', s => s.put(rec));
+  const idbGet = id => idbDo('readonly', s => s.get(id));
+  const idbDel = id => idbDo('readwrite', s => s.delete(id));
+  function readMeta(buf) {                                        // Ultralytics writes class names and image size into the ONNX metadata
+    const u8 = new Uint8Array(buf), txt = new TextDecoder('latin1').decode(u8.subarray(Math.max(0, u8.length - 400000)));
+    const out = { names: null, imgsz: null };
+    const nm = /names[^{]{0,8}(\{[^}]*\})/.exec(txt);
+    if (nm) { const arr = []; for (const m of nm[1].matchAll(/(\d+):\s*(?:'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)")/g)) arr[+m[1]] = m[2] ?? m[3]; if (arr.length && arr.every(x => x !== undefined)) out.names = arr; }
+    const sz = /imgsz[^\[]{0,8}\[\s*(\d+)\s*,\s*(\d+)\s*\]/.exec(txt);
+    if (sz) out.imgsz = [+sz[1], +sz[2]];
+    return out;
+  }
+  function layoutOf(dims, nNames) {                               // which YOLO export format is this?
+    if (dims.length !== 3) return null;
+    const [, a, b] = dims;
+    if (b === 6 && a !== 6) return { layout: 'v10', nc: null };                       // YOLOv10: rows of x1 y1 x2 y2 score class
+    if (a < b) return { layout: 'v8', nc: a - 4 };                                    // YOLOv8 and YOLO11: [1, 4 + classes, anchors]
+    if (nNames && b - 5 === nNames) return { layout: 'v5', nc: b - 5 };               // YOLOv5: [1, anchors, 5 + classes]
+    return { layout: 'v8t', nc: b - 4 };
+  }
+
+  /* YOLO through onnxruntime-web (WebAssembly). Supports YOLOv5u/v8/v11 and YOLOv10 exports. */
   let ortPromise = null;
   function loadOrt() {
     if (!ortPromise) ortPromise = (async () => {
@@ -148,14 +174,20 @@
   const sessions = {};
   class Yolo {
     constructor(model) {
-      this.model = model; this.size = 416; this.error = null; this.session = null; this.names = null;
+      this.model = model; this.size = model.size || 416; this.error = null; this.session = null; this.names = null; this.layout = model.layout || 'v8';
       this.c = document.createElement('canvas'); this.c.width = this.c.height = this.size; this.g = this.c.getContext('2d', { willReadFrequently: true });
-      if (!sessions[model.path]) sessions[model.path] = (async () => {
+      const key = model.custom ? 'c' + model.id : model.path;
+      if (!sessions[key]) sessions[key] = (async () => {
         const ort = await loadOrt();
+        if (model.custom) {
+          const rec = await idbGet(model.id);
+          if (!rec) throw new Error('The model file is no longer stored in this browser. Upload it again on the Models page.');
+          return { s: await ort.InferenceSession.create(new Uint8Array(rec.buf), { executionProviders: ['wasm'] }), names: model.names };
+        }
         const [s, names] = await Promise.all([ort.InferenceSession.create(model.path, { executionProviders: ['wasm'] }), fetch(model.names).then(r => r.json())]);
         return { s, names };
       })();
-      sessions[model.path].then(x => { this.session = x.s; this.names = x.names; }).catch(e => { this.error = e.message || String(e); delete sessions[model.path]; });
+      sessions[key].then(x => { this.session = x.s; this.names = x.names; }).catch(e => { this.error = e.message || String(e); delete sessions[key]; });
     }
     get loading() { return !this.session && !this.error; }
     async detect(src, w, h, conf) {
@@ -166,13 +198,21 @@
       const px = this.g.getImageData(0, 0, S, S).data, area = S * S, input = new Float32Array(3 * area);
       for (let i = 0; i < area; i++) { input[i] = px[i * 4] / 255; input[area + i] = px[i * 4 + 1] / 255; input[2 * area + i] = px[i * 4 + 2] / 255; }
       const out = await this.session.run({ [this.session.inputNames[0]]: new window.ort.Tensor('float32', input, [1, 3, S, S]) });
-      const t = out[this.session.outputNames[0]], N = t.dims[2], nc = t.dims[1] - 4, d = t.data, cand = [];
+      const t = out[this.session.outputNames[0]], d = t.data, cand = [], name = c => this.names[c] ?? 'class ' + c;
+      const toBox = (x1, y1, x2, y2) => [(x1 - dx) / k, (y1 - dy) / k, (x2 - dx) / k, (y2 - dy) / k];
+      if (this.layout === 'v10') {                              // already NMS-free
+        for (let i = 0; i < t.dims[1]; i++) { const r = d.subarray(i * 6, i * 6 + 6); if (r[4] >= conf) cand.push({ label: name(r[5] | 0), cls: r[5] | 0, conf: Math.round(r[4] * 100) / 100, box: toBox(r[0], r[1], r[2], r[3]) }); }
+        return cand.map(({ cls, ...rest }) => rest);
+      }
+      const transposed = this.layout === 'v8', N = transposed ? t.dims[2] : t.dims[1], C = transposed ? t.dims[1] : t.dims[2];
+      const at = (i, c) => transposed ? d[c * N + i] : d[i * C + c], off = this.layout === 'v5' ? 5 : 4, nc = C - off;
       for (let i = 0; i < N; i++) {
+        const obj = this.layout === 'v5' ? at(i, 4) : 1; if (obj < conf * 0.5) continue;
         let best = 0, bs = 0;
-        for (let c = 0; c < nc; c++) { const v = d[(4 + c) * N + i]; if (v > bs) { bs = v; best = c; } }
-        if (bs < conf) continue;
-        const cx = d[i], cy = d[N + i], bw = d[2 * N + i], bh = d[3 * N + i];
-        cand.push({ label: this.names[best], cls: best, conf: Math.round(bs * 100) / 100, box: [(cx - bw / 2 - dx) / k, (cy - bh / 2 - dy) / k, (cx + bw / 2 - dx) / k, (cy + bh / 2 - dy) / k] });
+        for (let c = 0; c < nc; c++) { const v = at(i, off + c); if (v > bs) { bs = v; best = c; } }
+        bs *= obj; if (bs < conf) continue;
+        const cx = at(i, 0), cy = at(i, 1), bw = at(i, 2), bh = at(i, 3);
+        cand.push({ label: name(best), cls: best, conf: Math.round(bs * 100) / 100, box: toBox(cx - bw / 2, cy - bh / 2, cx + bw / 2, cy + bh / 2) });
       }
       cand.sort((a, b) => b.conf - a.conf);
       const keep = [];
@@ -248,7 +288,7 @@
     }
     loadAnalytics() {
       this.analytics = S.analytics.filter(a => a.camera_id === this.id && a.enabled).map((row, i) => {
-        const model = find(MODELS, row.model_id);
+        const model = find(allModels(), row.model_id);
         const a = { row, color: COLORS[i % COLORS.length], state: new RuleState(), rule: row.rule, classes: row.classes.map(x => x.toLowerCase()), count: 0, infer_ms: 0, total: 0, labels: {}, history: [], dets: [], error: null, det: null };
         try { if (!model) throw new Error('Model was deleted'); a.det = model.kind === 'cocossd' ? new Coco() : model.kind === 'yolo' ? new Yolo(model) : new Motion(); } catch (e) { a.error = e.message; }
         return a;
@@ -329,10 +369,10 @@
     return { ...c, runtime: r ? r.public() : { status: 'stopped', message: '', fps_in: 0, fps_out: 0, size: null, analytics: [] },
       analytics_count: S.analytics.filter(a => a.camera_id === c.id).length, alerts_open: S.alerts.filter(a => a.camera_id === c.id && !a.acked).length };
   };
-  const modelList = () => MODELS.map(m => ({ ...m, exists: true, in_use: S.analytics.filter(a => a.model_id === m.id).length }));
+  const modelList = () => allModels().map(m => ({ ...m, names: undefined, builtin: !m.custom, exists: true, in_use: S.analytics.filter(a => a.model_id === m.id).length }));
   function checkAnalytic(b) {
     if (!(b.name || '').trim()) throw err('Name is required', 400);
-    if (!find(MODELS, b.model_id)) throw err('Model not found', 404);
+    if (!find(allModels(), b.model_id)) throw err('Model not found', 404);
     if (!(b.conf > 0 && b.conf <= 1)) throw err('Confidence must be between 0 and 1', 400);
     if (b.roi && b.roi.length && b.roi.length < 3) throw err('A zone needs at least 3 points', 400);
   }
@@ -373,9 +413,32 @@
   R('POST', '/test-source', (m, o) => ({ ok: false, message: /^rtsp/i.test(o.json.url) ? 'Browsers cannot open RTSP. Use the server version, or republish the stream as HLS and add the .m3u8 link.' : 'Connection tests need the server version. Add the camera and press Start to try it.' }));
   R('GET', '/models', () => modelList());
   R('POST', '/models', () => { throw err('Your own weights need the server version. This hosted demo runs in the browser, so it can only use the built-in models.', 400); });
-  R('POST', '/models/upload', () => { throw err('Your own weights need the server version. This hosted demo runs in the browser, so it can only use the built-in models.', 400); });
-  R('DELETE', '/models/(\\d+)', () => { throw err('The built-in models cannot be removed', 400); });
-  R('GET', '/models/(\\d+)/classes', m => { const md = find(MODELS, +m[1]); if (!md) throw err('Model not found', 404); if (md.kind === 'motion') return ['motion']; if (md.kind === 'yolo') return fetch(md.names).then(r => r.json()); return COCO; });
+  R('POST', '/models/upload', async (m, o) => {
+    const f = o.form.get('file'); if (!f || !f.name) throw err('Choose an .onnx file', 400);
+    if (/\.(pt|pth|engine|torchscript)$/i.test(f.name)) throw err('A browser cannot run ' + f.name.split('.').pop() + ' files. Export to ONNX first: yolo export model=best.pt format=onnx imgsz=640', 400);
+    if (!/\.onnx$/i.test(f.name)) throw err('Upload an .onnx file', 400);
+    if (f.size > 300e6) throw err('That file is larger than 300 MB, which is too big for a browser', 400);
+    const buf = await f.arrayBuffer(), meta = readMeta(buf);
+    let names = meta.names; const typed = (o.form.get('names') || '').split(',').map(x => x.trim()).filter(Boolean);
+    if (typed.length) names = typed;
+    const size = meta.imgsz ? Math.max(meta.imgsz[0], meta.imgsz[1]) : 640;
+    let info;
+    try {                                                     // load it and run one blank frame to learn the output format
+      const ort = await loadOrt(), s = await ort.InferenceSession.create(new Uint8Array(buf), { executionProviders: ['wasm'] });
+      const out = await s.run({ [s.inputNames[0]]: new ort.Tensor('float32', new Float32Array(3 * size * size), [1, 3, size, size]) });
+      info = layoutOf(out[s.outputNames[0]].dims, names ? names.length : 0);
+    } catch (e) { throw err('Could not run this model: ' + (e.message || e) + '. Export a fixed square size, for example imgsz=640.', 400); }
+    if (!info) throw err('This does not look like a YOLO detection model (unexpected output shape).', 400);
+    if (!names) names = Array.from({ length: info.nc || 80 }, (_, i) => 'class ' + i);
+    S.nid.m = S.nid.m || 1; const id = 100 + S.nid.m++, md = { id, name: (o.form.get('name') || f.name.replace(/\.onnx$/i, '')).trim(), kind: 'yolo', custom: true, notes: (o.form.get('notes') || '') + (meta.names ? '' : ' (no class names found in the file)'), names, size, layout: info.layout, bytes: f.size };
+    await idbPut({ id, buf }); S.models.push(md); save(); return { ...md, builtin: false };
+  });
+  R('DELETE', '/models/(\\d+)', async m => {
+    const md = find(S.models, +m[1]); if (!md) throw err('The built-in models cannot be removed', 400);
+    if (S.analytics.some(a => a.model_id === md.id)) throw err('This model is used by an analytic. Remove or change that analytic first', 400);
+    await idbDel(md.id); delete sessions['c' + md.id]; S.models = S.models.filter(x => x.id !== md.id); save(); return { ok: true };
+  });
+  R('GET', '/models/(\\d+)/classes', m => { const md = find(allModels(), +m[1]); if (!md) throw err('Model not found', 404); if (md.kind === 'motion') return ['motion']; if (md.kind === 'yolo') return md.custom ? md.names : fetch(md.names).then(r => r.json()); return COCO; });
   R('GET', '/default-rule', () => DEFAULT_RULE);
   const av = a => ({ ...a, enabled: !!a.enabled, rule: { ...DEFAULT_RULE, ...a.rule } });
   R('GET', '/cameras/(\\d+)/analytics', m => S.analytics.filter(a => a.camera_id === +m[1]).map(av));
