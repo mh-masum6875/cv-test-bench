@@ -84,13 +84,16 @@ async function pageProjects() {
   const ps = await api('/projects');
   view.innerHTML = `<div class="top"><div><h1>Projects</h1><p>Group cameras, models and alerts by the thing you are testing.</p></div>
     <button class="btn primary" data-act="new-project">New project</button></div>
+    ${ps.some(p => p.cameras) ? `<div class="card quick"><div><h3>See it working in one click</h3><p class="muted small">Starts an example camera with live detection, zones and alerts. Everything runs on this page.</p></div>
+      <button class="btn primary" data-act="quick-demo">Start live demo</button></div>` : ''}
     ${ps.length ? `<div class="grid">${ps.map(p => `<a class="card pcard" href="#/p/${p.id}">
       <h3>${esc(p.name)}</h3><div class="muted small">${esc(p.description) || 'No description'}</div>
       <div class="nums"><div><b>${p.cameras}</b><span class="muted small">cameras</span></div>
       <div><b style="color:${p.live ? 'var(--ok)' : 'inherit'}">${p.live}</b><span class="muted small">live</span></div>
       <div><b style="color:${p.alerts_open ? 'var(--crit)' : 'inherit'}">${p.alerts_open}</b><span class="muted small">open alerts</span></div></div></a>`).join('')}</div>`
       : `<div class="empty"><h3>No projects yet</h3><p>A project holds the cameras and analytics for one test, for example "Helmet model v3".</p>
-        <button class="btn primary" data-act="new-project">Create your first project</button></div>`}`;
+        <button class="btn primary" data-act="new-project">Create your first project</button></div>`}
+    <p class="hire">Need detection, counting or alerts on your own cameras? <a href="https://mh-masum6875.github.io" target="_blank" rel="noopener">Get in touch</a>.</p>`;
   refreshSide();
 }
 
@@ -454,6 +457,12 @@ document.addEventListener('click', async e => {
   const act = b.dataset.act, id = +b.dataset.id, pid = +view.dataset.pid, cid = +view.dataset.cid;
   try {
     if (act === 'new-project') projectForm();
+    else if (act === 'quick-demo') {
+      const ps = await api('/projects'), withCams = ps.filter(p => p.cameras);
+      const p = withCams.find(p => /safety/i.test(p.name)) || withCams.find(p => /retail/i.test(p.name)) || withCams[0]; if (!p) return;
+      const c = (await api(`/projects/${p.id}/cameras`))[0];
+      await api(`/cameras/${c.id}/start`, { method: 'POST' }); location.hash = '#/c/' + c.id;
+    }
     else if (act === 'edit-project') projectForm({ id: pid, name: view.dataset.pname, description: view.dataset.pdesc });
     else if (act === 'del-project') { if (confirm('Delete this project with all its cameras and alerts?')) { await api('/projects/' + pid, { method: 'DELETE' }); location.hash = '#/'; } }
     else if (act === 'add-camera') cameraForm(pid);
