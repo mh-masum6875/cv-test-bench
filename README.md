@@ -65,11 +65,56 @@ within seconds.
 Each analytic card shows objects now, milliseconds per frame, and a one-minute chart, so you can
 compare models on the same footage.
 
+## Stray dog monitoring
+
+This branch adds what a council-style stray dog pilot needs on top of the test bench.
+
+**Quick start** (server running, see "Run it" above):
+
+```bash
+python scripts/setup_stray_demo.py                    # synthetic test clip and the bundled YOLOv8n ONNX model
+python scripts/setup_stray_demo.py --video street.mp4 # your own footage
+python scripts/setup_stray_demo.py --rtsp rtsp://user:pass@192.168.1.20:554/stream1
+```
+
+It creates a project, a camera and an **Unaccompanied dog** analytic, starts it, and prints the links.
+
+What is new:
+
+| Feature | Where | Notes |
+| --- | --- | --- |
+| Tracking with IDs | `app/tracking.py` | IoU matching with a centre-distance fallback, no extra packages. Gives unique counts and time in view per dog |
+| "An object is alone" rule | Analytic editor, `condition: unaccompanied` | A dog counts only when no person is within N dog-heights (default 3). Red box = alone, grey = with a person |
+| Sightings log | `sightings` table | One row per tracked visit: first and last seen, time in view, time alone, largest group, position |
+| Hotspot heatmap | Insights tab, `GET /api/cameras/{id}/heatmap` | Where dogs stood (foot point) over the last day, week or month |
+| Trends | Insights tab, `GET /api/projects/{id}/insights` | Totals, by hour of day, by day, per camera |
+| CSV export | `GET /api/projects/{id}/sightings.csv` | For council reports |
+| Privacy | "Blur people" option on the analytic | People are blurred in the live view, the stored stills and alert pictures |
+| Login | `APP_PASSWORD=... APP_USER=...` environment variables | HTTP Basic login on every page and API call. Use HTTPS or a VPN in front of it |
+| ONNX models without PyTorch | `app/detectors.py`, `OnnxDetector` | `.onnx` exports of YOLOv5u/v8/11 and end-to-end exports (YOLO26) run with ONNX Runtime |
+| RF-DETR | Register a model with path `rfdetr:medium` (or `rfdetr:medium:/path/best.pth`) | Apache 2.0, safe for a commercial product. Needs `pip install rfdetr`. Written against the rfdetr package API but **not yet tested** in this branch |
+
+How a sighting is classed as **unaccompanied**: the dog was alone for at least the rule's
+"must hold for" time, or for most of the time it was in view. Sightings are written when a track
+ends (the dog leaves the view for more than 3 seconds) or when the camera stops.
+
+Honest limits, worth saying in any pitch:
+
+* A camera cannot see ownership. "Unaccompanied" means no person near the dog, which is what the
+  San Antonio roaming dog study also used. A loose pet dog will count too.
+* The bundled `yolov8n` model is small and sometimes calls a dog a cat at a distance. For a pilot,
+  fine-tune a detector on local day and night footage at the council's camera heights.
+* Night performance depends on the camera. Report day and night accuracy separately.
+* The bundled YOLOv8 weights are AGPL-3.0. Use RF-DETR (Apache 2.0) or an Ultralytics licence for a commercial product.
+* The synthetic clip from `scripts/make_stray_demo_video.py` only checks the pipeline. Do not use it as evidence of accuracy.
+
+Tests: `python -m pytest tests/test_tracking.py tests/test_rules.py`
+
 ## Alert rules
 
 | Setting | Meaning |
 | --- | --- |
-| Alert when | `objects are present` (N or more) or `nothing is detected` |
+| Alert when | `objects are present` (N or more), `nothing is detected`, or `an object is alone` (N or more targets with no companion nearby) |
 | Must hold for | The condition has to stay true this many seconds before an alert fires (dwell time) |
 | Wait between alerts | Cooldown, so one event does not flood you |
 | Active on, From, Until | Days and a time window. Windows that cross midnight work, for example 22:00 to 06:00 |
@@ -90,7 +135,8 @@ compare models on the same footage.
 ```
 app/main.py        API routes
 app/runner.py      one worker per camera: read, detect, apply rules, draw
-app/detectors.py   Motion detector and the Ultralytics wrapper. Add your own here
+app/detectors.py   Motion, Ultralytics, ONNX Runtime and RF-DETR detectors. Add your own here
+app/tracking.py    tracker and the "alone" check used by the unaccompanied rule
 app/rules.py       dwell time, cooldown and schedule logic
 app/db.py          SQLite tables
 docs/              the web interface (plain JavaScript, no build step). Also what GitHub Pages serves

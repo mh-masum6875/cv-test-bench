@@ -52,6 +52,9 @@ class RuleState:
         self.last_alert = ts
         if rule["condition"] == "absent":
             msg = f"Nothing detected for {held:.0f}s"
+        elif rule["condition"] == "unaccompanied":
+            name = rule.get("target_name") or "object"
+            msg = f"{count} unaccompanied {name}{'s' if count > 1 else ''} for {held:.0f}s"
         else:
             msg = f"{count} object(s) present for {held:.0f}s"
         return {"message": msg, "severity": rule["severity"], "held": round(held, 1)}

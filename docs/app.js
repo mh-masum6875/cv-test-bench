@@ -135,10 +135,11 @@ async function pageProject(pid, tab) {
     <div class="row"><button class="btn" data-act="edit-project">Edit</button><button class="btn danger" data-act="del-project">Delete</button>
     <button class="btn primary" data-act="add-camera">Add camera</button></div></div>
     <div class="stats" id="ph-stats"></div>
-    <div class="tabs">${[['live', 'Live wall'], ['cameras', 'Cameras'], ['alerts', 'Alerts']].map(([k, t]) => `<a href="#/p/${pid}?tab=${k}" class="${tab === k ? 'on' : ''}">${t}</a>`).join('')}</div>
+    <div class="tabs">${[['live', 'Live wall'], ['cameras', 'Cameras'], ['alerts', 'Alerts'], ['insights', 'Insights']].map(([k, t]) => `<a href="#/p/${pid}?tab=${k}" class="${tab === k ? 'on' : ''}">${t}</a>`).join('')}</div>
     <div id="tab"></div>`;
   view.dataset.pid = pid; view.dataset.pname = p.name; view.dataset.pdesc = p.description || '';
   if (tab === 'alerts') { await stats(); await renderAlerts({ project_id: pid }, true); timer = setInterval(() => { stats(); renderAlerts({ project_id: pid }, true); }, 4000); }
+  else if (tab === 'insights') { await stats(); await renderInsights(pid); timer = setInterval(() => { if (!document.hidden) renderInsights(pid, true); }, 10000); }
   else { await render(); timer = setInterval(() => { if (tab === 'cameras' || !document.hidden) render(); }, tab === 'live' ? 4000 : 2500); }
   refreshSide();
 }
@@ -257,6 +258,99 @@ async function renderAlerts(filter, full) {
     : `<div class="empty"><h3>No alerts</h3><p>Alerts appear here when an analytic's rule holds for long enough.</p></div>`);
 }
 
+/* ---------------------------------------------------------- insights (sightings, hotspots, trends) */
+let insightsDays = 7;
+const fmtDur = s => s >= 60 ? `${Math.floor(s / 60)}m ${Math.round(s % 60)}s` : `${Math.round(s)}s`;
+const hourLabel = h => h === null || h === undefined ? '-' : `${String(h).padStart(2, '0')}:00`;
+
+async function renderInsights(pid, refresh = false) {
+  const el = $('#tab'); if (!el) return;
+  if (MODE === 'demo') {
+    el.innerHTML = `<div class="empty"><h3>Insights need the server version</h3><p>Sightings, hotspot maps and trends are stored in the server's database.
+      Run the server (double-click <span class="mono">run.bat</span> on Windows) to see them.</p></div>`; return;
+  }
+  const [ins, rows, cams] = await Promise.all([api(`/projects/${pid}/insights?days=${insightsDays}`), api(`/projects/${pid}/sightings?days=${insightsDays}&limit=100`), api(`/projects/${pid}/cameras`)]);
+  if (!$('#tab')) return;
+  const t = ins.totals;
+  const ranges = [[1, 'Last 24 hours'], [7, 'Last 7 days'], [30, 'Last 30 days']];
+  const scroll = window.scrollY;
+  el.innerHTML = `
+    <div class="row" style="margin-bottom:14px;flex-wrap:wrap"><div class="seg">${ranges.map(([d, l]) => `<button data-act="ins-range" data-days="${d}" class="${insightsDays === d ? 'on' : ''}">${l}</button>`).join('')}</div>
+      <span class="grow"></span><a class="btn small" href="api/projects/${pid}/sightings.csv?days=${insightsDays}">Download CSV</a><button class="btn small danger" data-act="ins-clear">Clear data</button></div>
+    <div class="stats">
+      <div class="stat"><b>${t.sightings}</b><span>sightings (tracked visits)</span></div>
+      <div class="stat"><b style="color:${t.unaccompanied ? 'var(--crit)' : 'inherit'}">${t.unaccompanied}</b><span>unaccompanied</span></div>
+      <div class="stat"><b>${fmtDur(t.avg_dwell)}</b><span>average time in view</span></div>
+      <div class="stat"><b>${t.group_max}</b><span>largest group seen together</span></div>
+      <div class="stat"><b>${hourLabel(t.busiest_hour)}</b><span>busiest hour</span></div></div>
+    ${t.sightings ? '' : `<div class="card muted small" style="margin-bottom:16px">No sightings in this period yet. A sighting is saved when a tracked object leaves the view or the camera stops.
+      Add an analytic with the rule <b>an object is alone</b> and the class <b>dog</b>, then start the camera.</div>`}
+    <div class="two">
+      <div class="card"><h3 style="margin-top:0">By hour of day</h3><canvas id="ins-hour" width="640" height="220" class="chart"></canvas></div>
+      <div class="card"><h3 style="margin-top:0">By day</h3><canvas id="ins-day" width="640" height="220" class="chart"></canvas>
+        <div class="muted small"><span class="key" style="background:#5b6b78"></span>all sightings <span class="key" style="background:var(--crit);margin-left:10px"></span>unaccompanied</div></div>
+    </div>
+    <h2 style="margin:22px 0 10px">Hotspots by camera</h2>
+    <div class="muted small" style="margin:-4px 0 12px">Brighter areas are where tracked objects spent the most time (their foot position), over the selected period.</div>
+    <div class="grid heatgrid">${cams.map(c => {
+      const s = ins.cameras.find(x => x.camera_id === c.id) || { sightings: 0, unaccompanied: 0, avg_dwell: 0, group_max: 0 };
+      return `<div class="card heatcard"><div class="heatwrap"><img src="api/cameras/${c.id}/still.jpg?t=${refresh ? Date.now() : 0}" alt="${esc(c.name)}"><canvas data-heat="${c.id}"></canvas></div>
+        <div class="row" style="margin-top:10px"><a href="#/c/${c.id}"><b>${esc(c.name)}</b></a><span class="grow"></span>${chip(c.runtime.status)}</div>
+        <div class="kv"><span>Sightings <b>${s.sightings}</b></span><span>Unaccompanied <b>${s.unaccompanied}</b></span><span>Avg time <b>${fmtDur(s.avg_dwell)}</b></span><span>Largest group <b>${s.group_max}</b></span></div></div>`;
+    }).join('') || '<div class="muted">No cameras in this project.</div>'}</div>
+    <h2 style="margin:22px 0 10px">Recent sightings</h2>
+    ${rows.length ? `<div class="card tablewrap"><table><tr><th>Seen</th><th>Camera</th><th>Object</th><th>Time in view</th><th>Time alone</th><th>Group</th><th>Status</th></tr>
+      ${rows.map(r => `<tr><td class="small">${new Date(r.first_ts * 1000).toLocaleString()}</td><td>${esc(r.camera_name || 'Camera removed')}</td><td>${esc(r.label)} #${r.track_id}</td>
+        <td>${fmtDur(r.duration)}</td><td>${fmtDur(r.alone_seconds || 0)}</td><td>${r.group_max}</td>
+        <td>${r.unaccompanied ? '<span class="sev warning">unaccompanied</span>' : '<span class="muted small">with a person</span>'}</td></tr>`).join('')}</table></div>`
+      : '<div class="muted small">Nothing recorded yet.</div>'}`;
+  window.scrollTo(0, scroll);
+  bars($('#ins-hour'), ins.by_hour.map((v, h) => ({ label: h % 3 === 0 ? String(h).padStart(2, '0') : '', a: v })));
+  bars($('#ins-day'), ins.by_day.map(d => ({ label: d.date.slice(5), a: d.sightings, b: d.unaccompanied })));
+  for (const c of cams) {
+    const cv = el.querySelector(`canvas[data-heat="${c.id}"]`); if (!cv) continue;
+    api(`/cameras/${c.id}/heatmap?days=${insightsDays}`).then(h => drawHeat(cv, h)).catch(() => { });
+  }
+}
+
+function bars(cv, data) {
+  if (!cv) return;
+  const g = cv.getContext('2d'), W = cv.width, H = cv.height, padB = 26, padT = 24;
+  g.clearRect(0, 0, W, H);
+  if (!data.length) { g.fillStyle = '#8fa1ae'; g.font = '16px system-ui'; g.fillText('No data yet', 10, H / 2); return; }
+  const max = Math.max(1, ...data.map(d => d.a)), bw = W / data.length;
+  g.strokeStyle = '#243340'; g.beginPath(); g.moveTo(0, H - padB + .5); g.lineTo(W, H - padB + .5); g.stroke();
+  g.font = '13px system-ui'; g.textAlign = 'center';
+  data.forEach((d, i) => {
+    const w = Math.min(bw * 0.7, 56), x = i * bw + (bw - w) / 2, hA = (d.a / max) * (H - padB - padT);
+    g.fillStyle = '#5b6b78'; g.fillRect(x, H - padB - hA, w, hA);
+    if (d.b) { const hB = (d.b / max) * (H - padB - padT); g.fillStyle = '#f87171'; g.fillRect(x, H - padB - hB, w, hB); }
+    if (d.a && bw > 18) { g.fillStyle = '#e8eef2'; g.fillText(d.a, x + w / 2, H - padB - hA - 6); }
+    if (d.label) { g.fillStyle = '#8fa1ae'; g.fillText(d.label, x + w / 2, H - 8); }
+  });
+}
+
+function drawHeat(cv, h) {
+  const img = cv.previousElementSibling;
+  const paint = () => {
+    cv.width = img.clientWidth || 480; cv.height = img.clientHeight || 270;
+    const g = cv.getContext('2d'); g.clearRect(0, 0, cv.width, cv.height);
+    if (!h.max) return;
+    const off = document.createElement('canvas'); off.width = h.w; off.height = h.h;
+    const og = off.getContext('2d'), px = og.createImageData(h.w, h.h);
+    h.grid.forEach((v, i) => {
+      if (!v) return;
+      const t = Math.sqrt(v / h.max);                      // square root so quieter spots still show
+      const r = 255, gr = Math.round(220 * (1 - t)), a = Math.round(120 + 135 * t);
+      px.data.set([r, gr, 40, a], i * 4);
+    });
+    og.putImageData(px, 0, 0);
+    g.imageSmoothingEnabled = true; g.filter = 'blur(4px)';
+    g.drawImage(off, 0, 0, cv.width, cv.height);
+  };
+  if (img.complete && img.naturalWidth) paint(); else img.onload = paint;
+}
+
 /* ---------------------------------------------------------- camera page */
 async function pageCamera(cid) {
   const cam = await api('/cameras/' + cid);
@@ -300,7 +394,9 @@ async function pageCamera(cid) {
 }
 
 function ruleText(r) {
-  const cond = r.condition === 'absent' ? 'nothing detected' : `${r.count}+ object${r.count > 1 ? 's' : ''}`;
+  const cond = r.condition === 'absent' ? 'nothing detected'
+    : r.condition === 'unaccompanied' ? `${r.count}+ unaccompanied (no ${(r.companions || ['person']).join('/')} within ${r.companion_radius}x its height)`
+    : `${r.count}+ object${r.count > 1 ? 's' : ''}`;
   return `<span>Alert when <b>${cond}</b> for <b>${r.min_seconds}s</b></span><span>Cooldown <b>${r.cooldown_seconds}s</b></span>
     <span>Severity <b>${r.severity}</b></span><span><b>${r.start} to ${r.end}</b>, ${r.days.length === 7 ? 'every day' : r.days.map(d => DAYS[d]).join(' ')}</span>`;
 }
@@ -309,9 +405,10 @@ function analyticCard(a, rt) {
   return `<div class="an ${a.enabled ? '' : 'off'}"><div class="head"><div><h3>${esc(a.name)}</h3><div class="muted small">${esc(m ? m.name : 'Missing model')} | conf ${a.conf}</div></div>
     <div class="row"><button class="btn small" data-act="edit-an" data-id="${a.id}">Edit</button><button class="btn small danger" data-act="del-an" data-id="${a.id}">Delete</button></div></div>
     <div class="kv">${a.classes.length ? `<span>Classes <b>${esc(a.classes.join(', '))}</b></span>` : '<span>All classes</span>'}${a.roi.length >= 3 ? '<span>Zone <b>on</b></span>' : '<span>Whole frame</span>'}${a.webhook_url ? '<span>Webhook <b>on</b></span>' : ''}</div>
-    <div class="kv">${ruleText(a.rule)}</div>
+    <div class="kv">${ruleText(a.rule)}${a.rule.blur_people ? '<span>People <b>blurred</b></span>' : ''}</div>
     ${rt ? (rt.error ? `<div style="color:var(--crit)" class="small">Model error: ${esc(rt.error)}</div>` : `<div class="row small"><span>Now: <b style="font-size:1.1rem">${rt.count}</b> object${rt.count === 1 ? '' : 's'}</span>
       <span class="muted">${rt.infer_ms} ms / frame</span><span class="muted">${Object.entries(rt.labels).map(([k, v]) => k + ' ' + v).join(', ')}</span></div>
+      ${rt.tracks_now !== undefined ? `<div class="row small"><span>Tracked now <b>${rt.tracks_now}</b></span>${a.rule.condition === 'unaccompanied' ? `<span>Unaccompanied <b style="color:${rt.alone_now ? 'var(--crit)' : 'inherit'}">${rt.alone_now}</b></span>` : ''}<span class="muted">Unique since start <b>${rt.unique}</b></span></div>` : ''}
       <canvas class="spark" id="sp${a.id}" width="600" height="112"></canvas>`) : '<div class="muted small">Start the camera to see live numbers.</div>'}</div>`;
 }
 function spark(cv, hist) {
@@ -356,9 +453,15 @@ async function analyticForm(cid, a) {
       <div class="zone" id="zone"><img id="zone-img" src="${MODE === 'demo' ? window.DemoBackend.rawFrame(cid) : `api/cameras/${cid}/snapshot.jpg?raw=true&t=${Date.now()}`}"><canvas id="zone-cv"></canvas></div>
       <div class="row" style="margin-top:8px"><button class="btn small" id="z-undo">Undo point</button><button class="btn small" id="z-clear">Clear zone</button><span class="muted small" id="z-info"></span></div></div>
     <h3 style="margin:18px 0 10px">Alert rule</h3>
-    <div class="three"><div class="field"><label>Alert when</label><select id="r-cond"><option value="count_gte" ${r.condition === 'count_gte' ? 'selected' : ''}>objects are present</option><option value="absent" ${r.condition === 'absent' ? 'selected' : ''}>nothing is detected</option></select></div>
+    <div class="three"><div class="field"><label>Alert when</label><select id="r-cond"><option value="count_gte" ${r.condition === 'count_gte' ? 'selected' : ''}>objects are present</option><option value="absent" ${r.condition === 'absent' ? 'selected' : ''}>nothing is detected</option><option value="unaccompanied" ${r.condition === 'unaccompanied' ? 'selected' : ''}>an object is alone</option></select></div>
     <div class="field"><label>Number of objects (or more)</label><input id="r-count" type="number" min="1" value="${r.count}"></div>
     <div class="field"><label>Severity</label><select id="r-sev">${['info', 'warning', 'critical'].map(s => `<option ${r.severity === s ? 'selected' : ''}>${s}</option>`).join('')}</select></div></div>
+    <div id="r-unacc" class="${r.condition === 'unaccompanied' ? '' : 'hidden'}">
+      <div class="muted small" style="margin:-4px 0 10px">Use this for stray dogs: a dog counts only when no companion (a person) is near it. Put <b>dog</b> in the classes above.</div>
+      <div class="two"><div class="field"><label>Companion classes (comma separated)</label><input id="r-comp" value="${esc((r.companions || ['person']).join(', '))}"></div>
+      <div class="field"><label>Near means within this many dog-heights</label><input id="r-rad" type="number" min="0.5" max="20" step="0.5" value="${r.companion_radius ?? 3}"></div></div>
+    </div>
+    <label style="display:flex;gap:8px;align-items:center;color:var(--ink);margin:-4px 0 14px"><input type="checkbox" id="r-blur" ${r.blur_people ? 'checked' : ''}> Blur people in the live view and alert pictures (privacy)</label>
     <div class="two"><div class="field"><label>Must hold for (seconds)</label><input id="r-min" type="number" min="0" value="${r.min_seconds}"></div>
     <div class="field"><label>Wait between alerts (seconds)</label><input id="r-cool" type="number" min="0" value="${r.cooldown_seconds}"></div></div>
     <div class="field"><label>Active on</label><div class="days">${DAYS.map((d, i) => `<label><input type="checkbox" class="r-day" value="${i}" ${r.days.includes(i) ? 'checked' : ''}>${d}</label>`).join('')}</div></div>
@@ -382,6 +485,12 @@ async function analyticForm(cid, a) {
   cv.onclick = e => { const b = cv.getBoundingClientRect(); roi.push([+((e.clientX - b.left) / b.width).toFixed(4), +((e.clientY - b.top) / b.height).toFixed(4)]); draw(); };
   $('#z-undo').onclick = () => { roi.pop(); draw(); }; $('#z-clear').onclick = () => { roi = []; draw(); };
   $('#a-conf').oninput = e => $('#a-conf-v').textContent = e.target.value;
+  $('#r-cond').onchange = e => {
+    const u = e.target.value === 'unaccompanied';
+    $('#r-unacc').classList.toggle('hidden', !u);
+    if (u && !$('#a-classes').value.trim()) $('#a-classes').value = 'dog';
+    if (u) $('#r-blur').checked = true;
+  };
   $('#a-load').onclick = async () => {
     try { const c = await api(`/models/${$('#a-model').value}/classes`); $('#a-cls-hint').textContent = 'Model classes: ' + c.join(', '); }
     catch (e) { $('#a-cls-hint').textContent = e.message; }
@@ -391,7 +500,8 @@ async function analyticForm(cid, a) {
       name: $('#a-name').value, model_id: +$('#a-model').value, conf: +$('#a-conf').value,
       classes: $('#a-classes').value.split(',').map(s => s.trim()).filter(Boolean), roi, enabled: $('#a-on').checked, webhook_url: $('#a-hook').value,
       rule: { condition: $('#r-cond').value, count: +$('#r-count').value, min_seconds: +$('#r-min').value, cooldown_seconds: +$('#r-cool').value, severity: $('#r-sev').value,
-        days: [...document.querySelectorAll('.r-day:checked')].map(x => +x.value), start: $('#r-start').value || '00:00', end: $('#r-end').value || '23:59' }
+        days: [...document.querySelectorAll('.r-day:checked')].map(x => +x.value), start: $('#r-start').value || '00:00', end: $('#r-end').value || '23:59',
+        companions: $('#r-comp').value.split(',').map(s => s.trim()).filter(Boolean), companion_radius: +$('#r-rad').value || 3, blur_people: $('#r-blur').checked }
     };
     try {
       if (isNew) await api(`/cameras/${cid}/analytics`, { method: 'POST', json: body }); else await api('/analytics/' + a.id, { method: 'PUT', json: body });
@@ -478,6 +588,8 @@ document.addEventListener('click', async e => {
     else if (act === 'ack-all') { await api(`/projects/${pid}/alerts/ack-all`, { method: 'POST' }); route(); }
     else if (act === 'clear-alerts') { if (confirm('Delete every alert in this project?')) { await api(`/projects/${pid}/alerts`, { method: 'DELETE' }); route(); } }
     else if (act === 'add-model') modelForm();
+    else if (act === 'ins-range') { insightsDays = +b.dataset.days; renderInsights(pid); }
+    else if (act === 'ins-clear') { if (confirm('Delete all sightings and heatmaps for this project?')) { await api(`/projects/${pid}/insights`, { method: 'DELETE' }); renderInsights(pid); } }
     else if (act === 'del-model') { if (confirm('Remove this model from the list? The file is not deleted.')) { await api('/models/' + id, { method: 'DELETE' }); route(); } }
   } catch (err) { fail(err); }
 });

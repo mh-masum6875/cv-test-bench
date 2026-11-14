@@ -3,5 +3,8 @@ uvicorn>=0.29
 opencv-python-headless>=4.8
 python-multipart>=0.0.9
 numpy
-# Needed only to run your own YOLO weights (.pt, .onnx, .engine):
+onnxruntime>=1.17      # runs .onnx models without PyTorch
+# Needed only to run .pt or .engine weights:
 # ultralytics
+# Needed only for RF-DETR (Apache 2.0) models:
+# rfdetr

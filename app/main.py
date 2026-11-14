@@ -1,19 +1,26 @@
 """CV Test Bench: projects, cameras (RTSP or video files), models, analytics and alerts."""
+import base64
+import csv
+import datetime as dt
+import io
 import json
+import os
 import re
+import secrets
 import shutil
 import time
 from pathlib import Path
 from typing import List, Optional
 
 import cv2
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, PlainTextResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import db
-from .db import DATA, DEFAULT_RULE, loads
+from .db import DATA, DEFAULT_RULE, HEAT_H, HEAT_W, loads
+from .detectors import build_detector, kind_for
 from .runner import encode, manager, placeholder
 
 db.init()
@@ -24,6 +31,28 @@ STATIC = Path(__file__).resolve().parent.parent / "docs"
 @app.on_event("startup")
 def startup():
     manager.autostart()
+
+
+# Optional login. Set APP_PASSWORD (and APP_USER, default "admin") before giving anyone else access.
+APP_USER = os.environ.get("APP_USER", "admin")
+APP_PASSWORD = os.environ.get("APP_PASSWORD", "")
+
+
+@app.middleware("http")
+async def basic_auth(request: Request, call_next):
+    if APP_PASSWORD:
+        ok = False
+        header = request.headers.get("authorization", "")
+        if header.lower().startswith("basic "):
+            try:
+                user, _, pw = base64.b64decode(header[6:]).decode().partition(":")
+                ok = secrets.compare_digest(user, APP_USER) and secrets.compare_digest(pw, APP_PASSWORD)
+            except Exception:
+                ok = False
+        if not ok:
+            return PlainTextResponse("Login required", status_code=401,
+                                     headers={"WWW-Authenticate": 'Basic realm="CV Test Bench"'})
+    return await call_next(request)
 
 
 def safe_name(name):
@@ -73,6 +102,7 @@ def project_delete(pid: int):
     for c in db.q("SELECT id FROM cameras WHERE project_id=?", (pid,)):
         camera_delete(c["id"])
     db.run("DELETE FROM alerts WHERE project_id=?", (pid,))
+    db.run("DELETE FROM sightings WHERE project_id=?", (pid,))
     db.run("DELETE FROM projects WHERE id=?", (pid,))
     return {"ok": True}
 
@@ -149,6 +179,9 @@ def camera_delete(cid: int):
         Path(cam["source"]).unlink(missing_ok=True)
     db.run("DELETE FROM analytics WHERE camera_id=?", (cid,))
     db.run("DELETE FROM alerts WHERE camera_id=?", (cid,))
+    db.run("DELETE FROM sightings WHERE camera_id=?", (cid,))
+    db.run("DELETE FROM heat WHERE camera_id=?", (cid,))
+    (DATA / "stills" / f"{cid}.jpg").unlink(missing_ok=True)
     db.run("DELETE FROM cameras WHERE id=?", (cid,))
     return {"ok": True}
 
@@ -202,6 +235,22 @@ def camera_stream(cid: int):
     return StreamingResponse(gen(), media_type="multipart/x-mixed-replace; boundary=frame")
 
 
+@app.get("/api/cameras/{cid}/still.jpg")
+def camera_still(cid: int):
+    """A recent clean frame (people blurred if the analytic asks for it), used behind the heatmap."""
+    cam = need(db.one("SELECT * FROM cameras WHERE id=?", (cid,)), "Camera")
+    path = DATA / "stills" / f"{cid}.jpg"
+    if path.exists():
+        return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+    if cam["source_type"] == "file":
+        cap = cv2.VideoCapture(cam["source"])
+        ok, frame = cap.read()
+        cap.release()
+        if ok:
+            return Response(encode(frame), media_type="image/jpeg")
+    return Response(encode(placeholder("No picture yet. Start the camera.")), media_type="image/jpeg")
+
+
 class SourceTest(BaseModel):
     url: str
 
@@ -235,18 +284,25 @@ class ModelIn(BaseModel):
 def models():
     rows = db.q("SELECT * FROM models ORDER BY id")
     for m in rows:
-        m["exists"] = m["kind"] == "motion" or Path(m["path"]).exists()
+        m["exists"] = m["kind"] in ("motion", "rfdetr") or Path(m["path"]).exists()
         m["in_use"] = db.one("SELECT COUNT(*) n FROM analytics WHERE model_id=?", (m["id"],))["n"]
     return rows
 
 
 @app.post("/api/models")
 def model_register(m: ModelIn):
-    p = Path(m.path).expanduser()
-    if not p.exists():
-        raise HTTPException(400, f"File not found on the server: {p}")
+    kind = kind_for(m.path.strip())
+    if kind == "rfdetr":                      # rfdetr:medium, or rfdetr:medium:/path/to/weights.pth
+        p = m.path.strip()
+        weights = p.split(":", 2)[2] if p.count(":") >= 2 else ""
+        if weights and not Path(weights).expanduser().exists():
+            raise HTTPException(400, f"File not found on the server: {weights}")
+    else:
+        p = Path(m.path).expanduser()
+        if not p.exists():
+            raise HTTPException(400, f"File not found on the server: {p}")
     mid = db.run("INSERT INTO models(name,kind,path,notes,created_at) VALUES(?,?,?,?,?)",
-                 (m.name.strip(), "ultralytics", str(p), m.notes, time.time()))
+                 (m.name.strip(), kind, str(p), m.notes, time.time()))
     return db.one("SELECT * FROM models WHERE id=?", (mid,))
 
 
@@ -258,7 +314,7 @@ def model_upload(name: str = Form(...), notes: str = Form(""), file: UploadFile 
     with open(dest, "wb") as f:
         shutil.copyfileobj(file.file, f)
     mid = db.run("INSERT INTO models(name,kind,path,notes,created_at) VALUES(?,?,?,?,?)",
-                 (name.strip(), "ultralytics", str(dest), notes, time.time()))
+                 (name.strip(), kind_for(dest), str(dest), notes, time.time()))
     return db.one("SELECT * FROM models WHERE id=?", (mid,))
 
 
@@ -344,8 +400,7 @@ def model_classes(mid: int):
     if m["kind"] == "motion":
         return ["motion"]
     try:
-        from .detectors import UltralyticsDetector
-        return UltralyticsDetector(m["path"]).names
+        return build_detector(m).names
     except Exception as e:
         raise HTTPException(400, str(e))
 
@@ -394,6 +449,101 @@ def alerts_clear(pid: int):
         if a["snapshot"]:
             Path(a["snapshot"]).unlink(missing_ok=True)
     db.run("DELETE FROM alerts WHERE project_id=?", (pid,))
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------- insights (sightings and hotspots)
+def _since(days):
+    return time.time() - max(0.01, float(days)) * 86400
+
+
+@app.get("/api/projects/{pid}/insights")
+def insights(pid: int, days: float = 7, unaccompanied_only: bool = False):
+    """Totals, hour-of-day and daily trends and a per-camera summary of tracked sightings."""
+    need(db.one("SELECT id FROM projects WHERE id=?", (pid,)), "Project")
+    where, args = "project_id=? AND first_ts>=?", [pid, _since(days)]
+    if unaccompanied_only:
+        where += " AND unaccompanied=1"
+    rows = db.q(f"SELECT camera_id, first_ts, duration, unaccompanied, group_max FROM sightings WHERE {where}", args)
+    by_hour = [0] * 24
+    by_day = {}
+    for r in rows:
+        t = dt.datetime.fromtimestamp(r["first_ts"])
+        by_hour[t.hour] += 1
+        d = by_day.setdefault(t.strftime("%Y-%m-%d"), {"date": t.strftime("%Y-%m-%d"), "sightings": 0, "unaccompanied": 0})
+        d["sightings"] += 1
+        d["unaccompanied"] += r["unaccompanied"]
+    cams = {c["id"]: c["name"] for c in db.q("SELECT id, name FROM cameras WHERE project_id=?", (pid,))}
+    per_cam = {}
+    for r in rows:
+        c = per_cam.setdefault(r["camera_id"], {"camera_id": r["camera_id"], "name": cams.get(r["camera_id"], "Camera removed"),
+                                                "sightings": 0, "unaccompanied": 0, "dwell": 0.0, "group_max": 0})
+        c["sightings"] += 1
+        c["unaccompanied"] += r["unaccompanied"]
+        c["dwell"] += r["duration"] or 0
+        c["group_max"] = max(c["group_max"], r["group_max"] or 1)
+    for c in per_cam.values():
+        c["avg_dwell"] = round(c.pop("dwell") / max(1, c["sightings"]), 1)
+    n = len(rows)
+    return {
+        "days": days,
+        "totals": {"sightings": n, "unaccompanied": sum(r["unaccompanied"] for r in rows),
+                   "avg_dwell": round(sum(r["duration"] or 0 for r in rows) / max(1, n), 1),
+                   "group_max": max([r["group_max"] or 1 for r in rows] or [0]),
+                   "busiest_hour": max(range(24), key=lambda h: by_hour[h]) if n else None},
+        "by_hour": by_hour,
+        "by_day": [by_day[k] for k in sorted(by_day)],
+        "cameras": sorted(per_cam.values(), key=lambda c: -c["sightings"]),
+    }
+
+
+@app.get("/api/projects/{pid}/sightings")
+def sightings(pid: int, days: float = 7, limit: int = 200):
+    rows = db.q("SELECT s.*, c.name camera_name FROM sightings s LEFT JOIN cameras c ON c.id=s.camera_id "
+                "WHERE s.project_id=? AND s.first_ts>=? ORDER BY s.first_ts DESC LIMIT ?", (pid, _since(days), limit))
+    return rows
+
+
+@app.get("/api/projects/{pid}/sightings.csv")
+def sightings_csv(pid: int, days: float = 30):
+    rows = sightings(pid, days, 100000)
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["camera", "label", "track_id", "first_seen", "last_seen", "duration_s", "unaccompanied",
+                "seconds_alone", "share_of_time_alone", "largest_group", "x_in_frame", "y_in_frame", "confidence"])
+    for r in rows:
+        w.writerow([r["camera_name"], r["label"], r["track_id"],
+                    dt.datetime.fromtimestamp(r["first_ts"]).isoformat(timespec="seconds"),
+                    dt.datetime.fromtimestamp(r["last_ts"]).isoformat(timespec="seconds"),
+                    r["duration"], "yes" if r["unaccompanied"] else "no", r["alone_seconds"], r["alone_share"], r["group_max"],
+                    r["cx"], r["cy"], r["conf"]])
+    name = f"sightings_project{pid}_{dt.date.today().isoformat()}.csv"
+    return Response(buf.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+@app.get("/api/cameras/{cid}/heatmap")
+def heatmap(cid: int, days: float = 7):
+    """Where tracked targets stood, as a grid of counts over the camera frame (row by row)."""
+    need(db.one("SELECT id FROM cameras WHERE id=?", (cid,)), "Camera")
+    grid = [0] * (HEAT_W * HEAT_H)
+    since_hour = int(_since(days) // 3600)
+    for r in db.q("SELECT cell, SUM(n) n FROM heat WHERE camera_id=? AND hour>=? GROUP BY cell", (cid, since_hour)):
+        if 0 <= r["cell"] < len(grid):
+            grid[r["cell"]] = r["n"]
+    r = manager.get(cid)                       # include what has not been written to the database yet
+    if r:
+        for a in r.analytics:
+            for i, v in enumerate(a.heat.tolist()):
+                grid[i] += int(v)
+    return {"w": HEAT_W, "h": HEAT_H, "grid": grid, "max": max(grid)}
+
+
+@app.delete("/api/projects/{pid}/insights")
+def insights_clear(pid: int):
+    db.run("DELETE FROM sightings WHERE project_id=?", (pid,))
+    for c in db.q("SELECT id FROM cameras WHERE project_id=?", (pid,)):
+        db.run("DELETE FROM heat WHERE camera_id=?", (c["id"],))
     return {"ok": True}
 
 
