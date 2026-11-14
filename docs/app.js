@@ -61,11 +61,12 @@ function route() {
   clearInterval(timer); timer = null;
   const parts = location.hash.replace(/^#\/?/, '').split('?')[0].split('/').filter(Boolean);
   const q = new URLSearchParams(location.hash.split('?')[1] || '');
-  document.querySelectorAll('[data-nav]').forEach(a => a.classList.toggle('on', a.dataset.nav === (parts[0] === 'models' ? 'models' : (!parts[0] ? 'projects' : ''))));
+  document.querySelectorAll('[data-nav]').forEach(a => a.classList.toggle('on', a.dataset.nav === (parts[0] === 'models' || parts[0] === 'work' ? parts[0] : (!parts[0] ? 'projects' : ''))));
   if (!parts.length) return pageProjects();
   if (parts[0] === 'p') return pageProject(+parts[1], q.get('tab') || 'live');
   if (parts[0] === 'c') return pageCamera(+parts[1]);
   if (parts[0] === 'models') return pageModels();
+  if (parts[0] === 'work') return pageWork();
   view.innerHTML = '<div class="empty"><h3>Page not found</h3><a href="#/">Back to projects</a></div>';
 }
 window.addEventListener('hashchange', route);
@@ -84,7 +85,14 @@ async function pageProjects() {
   const ps = await api('/projects');
   view.innerHTML = `<div class="top"><div><h1>Projects</h1><p>Group cameras, models and alerts by the thing you are testing.</p></div>
     <button class="btn primary" data-act="new-project">New project</button></div>
-    ${ps.some(p => p.cameras) ? `<div class="card quick"><div><h3>See it working in one click</h3><p class="muted small">Starts an example camera with live detection, zones and alerts. Everything runs on this page.</p></div>
+    ${MODE === 'demo' ? `<div class="starts">
+      <div class="card start"><h3>Use my webcam</h3><p class="muted small">Runs an object detector on this computer's camera. Your browser asks for permission first, and no video leaves your computer.</p>
+        <button class="btn primary" data-act="quick-webcam">Start webcam</button></div>
+      <div class="card start"><h3>Test my own model</h3><p class="muted small">Add a YOLO detection model as an ONNX file and run it on a webcam, a video file or a stream link. The file stays in your browser.</p>
+        <button class="btn primary" data-act="quick-model">Add my model</button></div>
+      ${ps.some(p => p.cameras) ? `<div class="card start"><h3>Run the example</h3><p class="muted small">Starts an example camera with live detection, tracking, zones and alerts on sample footage.</p>
+        <button class="btn primary" data-act="quick-demo">Start live demo</button></div>` : ''}</div>`
+      : ps.some(p => p.cameras) ? `<div class="card quick"><div><h3>See it working in one click</h3><p class="muted small">Starts an example camera with live detection, zones and alerts.</p></div>
       <button class="btn primary" data-act="quick-demo">Start live demo</button></div>` : ''}
     ${ps.length ? `<div class="grid">${ps.map(p => `<a class="card pcard" href="#/p/${p.id}">
       <h3>${esc(p.name)}</h3><div class="muted small">${esc(p.description) || 'No description'}</div>
@@ -93,7 +101,7 @@ async function pageProjects() {
       <div><b style="color:${p.alerts_open ? 'var(--crit)' : 'inherit'}">${p.alerts_open}</b><span class="muted small">open alerts</span></div></div></a>`).join('')}</div>`
       : `<div class="empty"><h3>No projects yet</h3><p>A project holds the cameras and analytics for one test, for example "Helmet model v3".</p>
         <button class="btn primary" data-act="new-project">Create your first project</button></div>`}
-    <p class="hire">Need detection, counting or alerts on your own cameras? <a href="https://mh-masum6875.github.io" target="_blank" rel="noopener">Get in touch</a>.</p>`;
+    <p class="hire">Need a detection model trained, made faster or checked on your own cameras? <a href="#/work">Work with me</a>.</p>`;
   refreshSide();
 }
 
@@ -507,6 +515,36 @@ async function analyticForm(cid, a) {
   };
 }
 
+/* ---------------------------------------------------------- work with me */
+const OFFERS = [
+  ['YOLO fine-tune plus TensorRT export', '5 working days', 'A labelled dataset and the GPU or device you plan to run on.',
+    'Trained weights, ONNX and TensorRT files, an accuracy report on your validation split, measured latency, and a script that reproduces both.'],
+  ['Latency and accuracy audit', '3 working days', 'Access to your detection pipeline, or a recording of it running, and a validation set.',
+    'A written report on where the time goes at each stage, accuracy on your data, and a ranked list of fixes with the expected gain of each.'],
+  ['Dataset and evaluation check', '2 working days', 'Your annotations and the script that produces your accuracy number.',
+    'A report on label problems, format conversion errors and metric mistakes, with a fix for each.']
+];
+function pageWork() {
+  view.innerHTML = `<div class="top"><div><h1>Work with me</h1><p>Fixed-scope computer vision projects for small teams and agencies.</p></div>
+    <a class="btn primary" href="mailto:mhmasum6875@gmail.com">Email me</a></div>
+    <p class="worklede">I'm Maidul Hasan Masum. I built this test bench, and I train, measure and deploy detection models.
+      Each project below has a set list of deliverables and a set timeline, agreed before work starts. Prices are on request.</p>
+    <div class="grid">${OFFERS.map(([t, days, send, get]) => `<div class="card offer"><h3>${t}</h3><div class="days">${days}</div>
+      <p><b>You send:</b> ${send}</p><p><b>You get:</b> ${get}</p></div>`).join('')}</div>
+    <h2 style="margin:26px 0 10px">How I work</h2>
+    <ul class="worklist">
+      <li>Every speed or accuracy figure I give you comes from a run you can repeat, with the hardware, software versions and input size written next to it.</li>
+      <li>If I measure on my own machine it is an RTX 3050 laptop GPU with 4 GB of memory, and the report says so. For numbers on your hardware, I run the same script there.</li>
+      <li>You own the code, the weights and the report.</li>
+      <li>I work in English from Kuala Lumpur (UTC+8), with a few hours of overlap with Europe and Australia each day.</li>
+    </ul>
+    <h2 style="margin:26px 0 10px">Try before you write</h2>
+    <p class="worklede">You can check how I build things without talking to me. <a href="#/">Run a detector on your webcam or add your own model</a> on this site,
+      read the <a href="${REPO}" target="_blank" rel="noopener">source code</a>, or see my <a href="https://mh-masum6875.github.io" target="_blank" rel="noopener">background and publications</a>.</p>
+    <p class="worklede">To start, email <a href="mailto:mhmasum6875@gmail.com">mhmasum6875@gmail.com</a> with your model, your target hardware and the problem.</p>`;
+  refreshSide();
+}
+
 /* ---------------------------------------------------------- models */
 async function pageModels() {
   models = await api('/models');
@@ -568,6 +606,20 @@ document.addEventListener('click', async e => {
       const ps = await api('/projects'), withCams = ps.filter(p => p.cameras);
       const p = withCams.find(p => /stray/i.test(p.name)) || withCams.find(p => /safety/i.test(p.name)) || withCams[0]; if (!p) return;
       const c = (await api(`/projects/${p.id}/cameras`))[0];
+      await api(`/cameras/${c.id}/start`, { method: 'POST' }); location.hash = '#/c/' + c.id;
+    }
+    else if (act === 'quick-model') { location.hash = '#/models'; await pageModels(); modelForm(); }
+    else if (act === 'quick-webcam') {
+      b.disabled = true; b.textContent = 'Starting...';
+      const ps = await api('/projects');
+      const p = ps.find(x => x.name === 'My tests') || await api('/projects', { method: 'POST', json: { name: 'My tests', description: 'Your own webcam, videos and models.' } });
+      const cams = await api(`/projects/${p.id}/cameras`);
+      let c = cams.find(x => x.source_type === 'webcam');
+      if (!c) {
+        c = await api(`/projects/${p.id}/cameras`, { method: 'POST', json: { name: 'Webcam', source_type: 'webcam', source: '', fps_limit: 5 } });
+        const all = await api('/models'), m = all.find(x => x.kind === 'yolo' && x.builtin !== false) || all.find(x => x.kind === 'cocossd') || all[0];
+        await api(`/cameras/${c.id}/analytics`, { method: 'POST', json: { name: 'Everyday objects', model_id: m.id, conf: 0.4, classes: [], roi: [], enabled: true, webhook_url: '', rule: await api('/default-rule') } });
+      }
       await api(`/cameras/${c.id}/start`, { method: 'POST' }); location.hash = '#/c/' + c.id;
     }
     else if (act === 'edit-project') projectForm({ id: pid, name: view.dataset.pname, description: view.dataset.pdesc });
