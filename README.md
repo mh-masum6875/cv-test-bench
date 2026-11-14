@@ -68,8 +68,8 @@ compare models on the same footage.
 ## Stray dog monitoring
 
 This adds what a council-style stray dog pilot needs on top of the test bench. The hosted demo has a ready
-**Example: Stray dog monitoring** project (press **Start live demo** on the Projects page). It runs AI-generated
-sample footage of a residential street, labelled as such, so it shows how the system works, not how accurate it is on real cameras.
+**Example: Stray dog monitoring** project (press **Start live demo** on the Projects page). Its two cameras play AI-generated
+sample footage of residential streets, labelled as such, so it shows how the system works, not how accurate it is on real cameras.
 
 **Quick start** (server running, see "Run it" above):
 

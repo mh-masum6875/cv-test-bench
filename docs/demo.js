@@ -35,21 +35,40 @@
   /* Ready-made examples that mirror the areas in my applied computer vision repositories.
      They use open YOLO models and CC BY 4.0 sample footage, so they show the idea, not my client models. */
   const STRAY = { name: 'Example: Stray dog monitoring', camera: 'Residential street (AI-generated footage)',
-    description: 'Flags a dog only when no person is near it (a pet on a leash stays grey, a stray alone turns red), tracks each dog with an ID, blurs faces, '
+    camera2: 'Street from a higher pole (AI-generated footage)',
+    description: 'Flags a dog only when no person is near it (a pet on a leash shows in blue, a stray alone turns red), tracks each dog with an ID, blurs faces, '
       + 'and builds hotspots and trends on the Insights tab. The footage is AI-generated sample video of a Shah Alam street, so it shows how the system works, '
       + 'not how accurate it is on real cameras. The detector here is a small general model; a pilot would use one trained on local footage.' };
+  const STRAY_ANALYTIC = { name: 'Unaccompanied dog', model_id: 3, conf: 0.2, classes: ['dog'],
+    rule: { condition: 'unaccompanied', min_seconds: 2, cooldown_seconds: 15, severity: 'warning', companions: ['person'], companion_radius: 3, blur_people: true } };
+  function addStrayCamera2(p) {                                 // a second camera in the stray example
+    if (!p || S.cameras.some(c => c.project_id === p.id && c.source === 'samples/stray2')) return;
+    const t = Date.now() / 1000, c = { id: nid('c'), project_id: p.id, name: STRAY.camera2, source_type: 'sample', source: 'samples/stray2', enabled: 0, fps_limit: 4, created_at: t };
+    S.cameras.push(c);
+    S.analytics.push({ id: nid('a'), camera_id: c.id, enabled: 1, webhook_url: '', created_at: t, roi: [], ...STRAY_ANALYTIC, classes: [...STRAY_ANALYTIC.classes], rule: { ...DEFAULT_RULE, ...STRAY_ANALYTIC.rule } });
+  }
+  function lowerStrayConf() {
+    const p = S.projects.find(x => x.name === STRAY.name), c = p && S.cameras.find(x => x.project_id === p.id);
+    if (c) S.analytics.forEach(a => { if (a.camera_id === c.id && a.conf === 0.3) a.conf = 0.2; });
+    if (p) p.description = STRAY.description;
+    addStrayCamera2(p);
+  }
   function addPresets() {
     if (S.presets === 3) {                                       // earlier visitors: refresh the stray example text, then fall through
       S.projects.forEach(p => { p.description = (p.description || '').replace(' The detector is YOLOv8n from Ultralytics.', '').replace('a dedicated PPE model', 'a dedicated safety-gear model'); });
       const p = S.projects.find(x => x.name === STRAY.name);
       if (p) { p.description = STRAY.description; const c = S.cameras.find(x => x.project_id === p.id); if (c) c.name = STRAY.camera; }
-      S.presets = 5; save(); return;
+      lowerStrayConf(); S.presets = 7; save(); return;
     }
     if (S.presets === 4) {                                       // remove model names from the older example texts
       S.projects.forEach(p => { p.description = (p.description || '').replace(' The detector is YOLOv8n from Ultralytics.', '').replace('a dedicated PPE model', 'a dedicated safety-gear model'); });
-      S.presets = 5; save(); return;
+      lowerStrayConf(); S.presets = 7; save(); return;
     }
-    if (S.presets === 5) return;
+    if (S.presets === 5) {                                       // stray example: lower threshold, fewer blinking boxes
+      lowerStrayConf(); S.presets = 7; save(); return;
+    }
+    if (S.presets === 6) { lowerStrayConf(); S.presets = 7; save(); return; }
+    if (S.presets === 7) return;
     const t = Date.now() / 1000, rule = (o) => ({ ...DEFAULT_RULE, ...o });
     const mk = (name, description, camName, sample, an) => {
       const p = { id: nid('p'), name, description, created_at: t }; S.projects.push(p);
@@ -59,7 +78,7 @@
     if (S.presets === 2) {
       addStray(mk);
       S.projects.forEach(p => { p.description = (p.description || '').replace(' The detector is YOLOv8n from Ultralytics.', '').replace('a dedicated PPE model', 'a dedicated safety-gear model'); });
-      S.presets = 5; save(); return;
+      S.presets = 7; save(); return;
     }
     mk('Example: Workplace safety', 'Raise an alert when a person walks into a marked floor zone. Press Start on the camera. Checking hard hats needs a dedicated safety-gear model, which the server version can load.',
       'Warehouse floor', 'safety', [{ name: 'Person in the marked zone', model_id: 3, conf: 0.35, classes: ['person'], roi: [[0.06, 0.34], [0.58, 0.2], [0.93, 0.58], [0.5, 0.98], [0.02, 0.8]], rule: { min_seconds: 1, cooldown_seconds: 8, severity: 'critical' } }]);
@@ -70,11 +89,11 @@
     mk('Example: Sorting and counting', 'Count items on a table. This one counts bottles, the same idea as counting recyclables or products on a line.',
       'Table', 'bottles', [{ name: 'Two or more bottles', model_id: 3, conf: 0.3, classes: ['bottle'], rule: { count: 2, min_seconds: 1, cooldown_seconds: 10, severity: 'info' } }]);
     addStray(mk);
-    S.presets = 5; save();
+    S.presets = 7; save();
   }
   function addStray(mk) {
-    mk(STRAY.name, STRAY.description, STRAY.camera, 'stray', [{ name: 'Unaccompanied dog', model_id: 3, conf: 0.3, classes: ['dog'],
-        rule: { condition: 'unaccompanied', min_seconds: 2, cooldown_seconds: 15, severity: 'warning', companions: ['person'], companion_radius: 3, blur_people: true } }]);
+    mk(STRAY.name, STRAY.description, STRAY.camera, 'stray', [{ ...STRAY_ANALYTIC, classes: [...STRAY_ANALYTIC.classes], rule: { ...STRAY_ANALYTIC.rule } }]);
+    addStrayCamera2(S.projects.find(x => x.name === STRAY.name));
   }
 
   function load() { try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && s.v === 1) return s; } catch (e) { } return seed(); }
@@ -415,7 +434,11 @@
       }
       const byId = new Map(conf.map(t => [t.id, t]));
       dets.forEach(d => { const t = byId.get(d.track_id); d.confirmed = !!t; d.alone = !!(t && t.alone); });
-      a.tracks_now = conf.length; a.alone_now = alone;
+      // a tracked dog missed for a moment keeps its last box for up to a second, so boxes and counts do not blink
+      const liveIds = new Set(live.map(t => t.id));
+      const coast = a.tracker.tracks.filter(t => t.hits >= a.tracker.minHits && !liveIds.has(t.id) && ts - t.last <= 1.0);
+      a.coast = coast.map(t => ({ label: t.label, conf: t.conf, box: t.box, track_id: t.id, confirmed: true, alone: t.alone }));
+      a.tracks_now = conf.length + coast.length; a.alone_now = alone + coast.filter(t => t.alone).length;
       this.endTracks(a, ended);
     }
     heatFor(ts) {
@@ -461,7 +484,7 @@
           g.globalAlpha = 0.12; g.fillStyle = a.color; g.fill(); g.globalAlpha = 1; g.strokeStyle = a.color; g.stroke();
         }
         const unacc = a.rule.condition === 'unaccompanied';
-        for (const d of a.dets) {
+        for (const d of [...a.dets, ...(a.coast || [])]) {
           const color = unacc && d.confirmed ? (d.alone ? '#eb3c3c' : '#3c8cfa') : a.color;
           const [x1, y1, x2, y2] = d.box; g.strokeStyle = color; g.strokeRect(x1, y1, x2 - x1, y2 - y1);
           const text = `${d.label}${d.confirmed ? ' #' + d.track_id : ''}${unacc && d.confirmed ? (d.alone ? ' alone' : ' with person') : ''}`, tw = g.measureText(text).width;
@@ -472,11 +495,12 @@
       g.fillStyle = '#fff'; g.font = '12px system-ui'; g.fillText(new Date().toLocaleString(), 8, h - 8);
     }
     alert(a, fired) {
-      const small = document.createElement('canvas'); small.width = 320; small.height = Math.round(320 * this.out.height / this.out.width);
+      const small = document.createElement('canvas'), sw = Math.min(640, this.out.width);   // big enough to view when enlarged
+      small.width = sw; small.height = Math.round(sw * this.out.height / this.out.width);
       small.getContext('2d').drawImage(this.out, 0, 0, small.width, small.height);
       const detail = { analytic: a.row.name, count: a.count, labels: { ...a.labels }, held: fired.held };
-      const al = { id: nid('al'), project_id: this.cam.project_id, camera_id: this.id, analytics_id: a.row.id, created_at: Date.now() / 1000, severity: fired.severity, message: `${a.row.name}: ${fired.message}`, snapshot: small.toDataURL('image/jpeg', 0.6), acked: 0, detail };
-      S.alerts.push(al); if (S.alerts.length > 200) S.alerts.shift(); save();
+      const al = { id: nid('al'), project_id: this.cam.project_id, camera_id: this.id, analytics_id: a.row.id, created_at: Date.now() / 1000, severity: fired.severity, message: `${a.row.name}: ${fired.message}`, snapshot: small.toDataURL('image/jpeg', 0.72), acked: 0, detail };
+      S.alerts.push(al); if (S.alerts.length > 80) S.alerts.shift(); save();
       if ((a.row.webhook_url || '').trim()) fetch(a.row.webhook_url, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ alert_id: al.id, camera: this.cam.name, ...detail, message: fired.message, severity: fired.severity, time: new Date().toISOString() }) }).catch(() => { });
     }
     public() {

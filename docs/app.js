@@ -201,7 +201,7 @@ function cameraForm(pid) {
     <div class="field"><label>Name</label><input id="f-name" placeholder="Gate camera"></div>
     <div id="src-sample" class="field ${type === 'sample' ? '' : 'hidden'}"><label>Sample clip</label><select id="f-sample">
       <option value="demo">Walking objects (simple test scene)</option><option value="safety">Warehouse floor with a marked zone</option><option value="traffic">Road seen from above</option>
-      <option value="retail">Shop aisle</option><option value="stray">Street with stray dogs (AI-generated)</option><option value="bottles">Bottles on a table</option><option value="people">People walking</option></select>
+      <option value="retail">Shop aisle</option><option value="stray">Street with stray dogs (AI-generated)</option><option value="stray2">Street from a higher pole, stray dogs (AI-generated)</option><option value="bottles">Bottles on a table</option><option value="people">People walking</option></select>
       <div class="muted small" style="margin-top:6px">Clips from the Intel IoT DevKit sample videos, licensed CC BY 4.0.</div></div>
     <div id="src-file" class="field ${type === 'file' ? '' : 'hidden'}"><label>Video file (mp4, webm, avi, mkv...)</label><input type="file" id="f-file" accept="video/*"></div>
     <div id="src-url" class="field hidden"><label id="url-label">Stream URL</label><input id="f-url" placeholder="rtsp://user:password@192.168.1.20:554/stream1">
@@ -251,7 +251,7 @@ async function renderAlerts(filter, full) {
   const head = full ? `<div class="row" style="margin-bottom:14px"><span class="muted">${list.length} alert${list.length === 1 ? '' : 's'}</span><span class="grow"></span>
     <button class="btn small" data-act="ack-all">Acknowledge all</button><button class="btn small danger" data-act="clear-alerts">Clear all</button></div>` : '';
   el.innerHTML = head + (list.length ? `<div class="${full ? 'card' : ''}">${list.map(a => `<div class="alert ${a.acked ? 'acked' : ''}">
-    <a ${MODE === 'demo' ? '' : `href="${alertImg(a.id)}" target="_blank"`}><img loading="lazy" src="${alertImg(a.id)}" alt="Snapshot"></a>
+    <a href="#" data-act="zoom-alert" data-id="${a.id}" title="Click to enlarge"><img loading="lazy" src="${alertImg(a.id)}" alt="Snapshot"></a>
     <div><span class="sev ${a.severity}">${a.severity}</span> <b>${esc(a.message)}</b>
     <div class="muted small">${esc(a.camera_name || 'Camera removed')} | ${ago(a.created_at)} | ${new Date(a.created_at * 1000).toLocaleTimeString()}</div></div>
     <div class="acts">${a.acked ? '<span class="muted small">Acknowledged</span>' : `<button class="btn small" data-act="ack" data-id="${a.id}">Acknowledge</button>`}</div></div>`).join('')}</div>`
@@ -584,6 +584,14 @@ document.addEventListener('click', async e => {
     else if (act === 'ack-all') { await api(`/projects/${pid}/alerts/ack-all`, { method: 'POST' }); route(); }
     else if (act === 'clear-alerts') { if (confirm('Delete every alert in this project?')) { await api(`/projects/${pid}/alerts`, { method: 'DELETE' }); route(); } }
     else if (act === 'add-model') modelForm();
+    else if (act === 'zoom-alert') {
+      e.preventDefault();
+      const row = b.closest('.alert'), msg = row ? row.querySelector('b') : null, meta = row ? row.querySelector('.muted') : null;
+      openModal(msg ? msg.textContent : 'Alert', `<img class="zoomimg" src="${alertImg(id)}" alt="Alert picture"><div class="muted small" style="margin-top:8px">${meta ? esc(meta.textContent) : ''}</div>`,
+        MODE === 'demo' ? '' : `<a class="btn" href="${alertImg(id)}" target="_blank" rel="noopener">Open full size</a>`);
+      modal.classList.add('wide');
+      modal.addEventListener('close', () => modal.classList.remove('wide'), { once: true });
+    }
     else if (act === 'ins-range') { insightsDays = +b.dataset.days; renderInsights(pid); }
     else if (act === 'ins-clear') { if (confirm('Delete all sightings and heatmaps for this project?')) { await api(`/projects/${pid}/insights`, { method: 'DELETE' }); renderInsights(pid); } }
     else if (act === 'del-model') { if (confirm('Remove this model from the list? The file is not deleted.')) { await api('/models/' + id, { method: 'DELETE' }); route(); } }

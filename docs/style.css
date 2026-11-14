@@ -152,3 +152,8 @@ dialog::backdrop{background:rgba(0,0,0,.65)}
 .heatwrap img{width:100%;display:block}
 .heatwrap canvas{position:absolute;inset:0;width:100%;height:100%;mix-blend-mode:screen}
 .heatcard .kv{margin-top:6px}
+
+/* enlarged alert picture */
+dialog.wide{width:min(1100px,96vw);max-width:96vw}
+.zoomimg{width:100%;height:auto;display:block;border-radius:8px;background:#05080a}
+.alert a[data-act="zoom-alert"]{cursor:zoom-in}

@@ -15,6 +15,7 @@ from .detectors import build_detector, inside
 from .rules import RuleState
 from .tracking import Tracker, is_alone
 
+COAST = 1.0                  # seconds a missed track keeps its box on screen
 ALONE = (60, 60, 235)        # BGR red for an unaccompanied target
 WITH = (250, 140, 60)        # BGR blue for a target with a companion nearby
 
@@ -74,7 +75,7 @@ class Analytic:
         self.heat = np.zeros(db.HEAT_W * db.HEAT_H, np.int64)
         self.heat_hour = None
         self.last_flush = time.time()
-        self.last_dets, self.last_companions = [], []
+        self.last_dets, self.last_companions, self.coast = [], [], []
         model = db.one("SELECT * FROM models WHERE id=?", (row["model_id"],))
         try:
             if not model:
@@ -286,7 +287,14 @@ class CameraRunner:
             t = by_id.get(d.get("track_id"))
             d["confirmed"] = t is not None
             d["alone"] = bool(t and t.alone)
-        a.tracks_now, a.alone_now = len(confirmed), alone_n
+        # a tracked dog the detector missed for a moment keeps its last box for up to COAST seconds,
+        # so boxes and counts do not blink when the score dips under the threshold for a frame or two
+        live_ids = {t.id for t in live}
+        coast = [t for t in a.tracker.tracks if t.hits >= a.tracker.min_hits and t.id not in live_ids and ts - t.last_ts <= COAST]
+        a.coast = [{"label": t.label, "conf": t.conf, "box": t.box, "track_id": t.id, "confirmed": True, "alone": t.alone}
+                   for t in coast]
+        a.tracks_now = len(confirmed) + len(coast)
+        a.alone_now = alone_n + sum(1 for t in coast if t.alone)
         self._end_tracks(a, ended)
         if time.time() - a.last_flush > 30:
             self._flush_heat(a)
@@ -347,7 +355,7 @@ class CameraRunner:
                 cv2.addWeighted(overlay, 0.12, frame, 0.88, 0, frame)
                 cv2.polylines(frame, [pts], True, a.color, 2, cv2.LINE_AA)
             unacc = a.rule.get("condition") == "unaccompanied"
-            for d in getattr(a, "last_dets", []):
+            for d in list(getattr(a, "last_dets", [])) + list(getattr(a, "coast", [])):
                 x1, y1, x2, y2 = [int(v) for v in d["box"]]
                 color = a.color
                 if unacc and d.get("confirmed"):

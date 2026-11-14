@@ -11,7 +11,7 @@ Everything below was made by other people and keeps its own licence.
 | TensorFlow.js and COCO-SSD (model and runtime) | `docs/vendor/`, `docs/models/coco-ssd/` | Apache-2.0, Google |
 | ONNX Runtime Web | `docs/vendor/ort/` | MIT, Microsoft |
 | hls.js | `docs/vendor/hls.min.js` | Apache-2.0 |
-| Stray dog sample footage (`docs/samples/stray.mp4`, `stray.webm`) | `docs/samples/` | AI-generated with Google Gemini for this demo; not real CCTV footage. The people and dogs in it are generated |
+| Stray dog sample footage (`docs/samples/stray.*`, `stray2.*`) | `docs/samples/` | AI-generated with Google Gemini for this demo; not real CCTV footage. The people and dogs in it are generated |
 | Synthetic pipeline test clip made by `scripts/make_stray_demo_video.py` (not bundled) | made on your machine | Uses the dog in darknet's `data/dog.jpg` (https://github.com/pjreddie/darknet, public domain licence) and a shopper cut from the Intel IoT DevKit retail sample (CC BY 4.0) |
 
 The browser demo is a showcase of general open models. It is not my own research or client work.

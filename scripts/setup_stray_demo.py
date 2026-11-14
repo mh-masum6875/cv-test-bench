@@ -54,7 +54,7 @@ def main():
     ap.add_argument("--rtsp", help="an RTSP URL to use as the camera")
     ap.add_argument("--model", default=str(ROOT / "docs" / "models" / "yolo" / "yolov8n-416.onnx"),
                     help="model path (.onnx, .pt, .engine) or rfdetr:medium")
-    ap.add_argument("--conf", type=float, default=0.3)
+    ap.add_argument("--conf", type=float, default=0.2)
     ap.add_argument("--name", default="Stray dog monitoring")
     a = ap.parse_args()
 
