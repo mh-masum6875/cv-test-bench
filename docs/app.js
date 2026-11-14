@@ -201,7 +201,7 @@ function cameraForm(pid) {
     <div class="field"><label>Name</label><input id="f-name" placeholder="Gate camera"></div>
     <div id="src-sample" class="field ${type === 'sample' ? '' : 'hidden'}"><label>Sample clip</label><select id="f-sample">
       <option value="demo">Walking objects (simple test scene)</option><option value="safety">Warehouse floor with a marked zone</option><option value="traffic">Road seen from above</option>
-      <option value="retail">Shop aisle</option><option value="stray">Street with stray dogs (synthetic test clip)</option><option value="bottles">Bottles on a table</option><option value="people">People walking</option></select>
+      <option value="retail">Shop aisle</option><option value="stray">Street with stray dogs (AI-generated)</option><option value="bottles">Bottles on a table</option><option value="people">People walking</option></select>
       <div class="muted small" style="margin-top:6px">Clips from the Intel IoT DevKit sample videos, licensed CC BY 4.0.</div></div>
     <div id="src-file" class="field ${type === 'file' ? '' : 'hidden'}"><label>Video file (mp4, webm, avi, mkv...)</label><input type="file" id="f-file" accept="video/*"></div>
     <div id="src-url" class="field hidden"><label id="url-label">Stream URL</label><input id="f-url" placeholder="rtsp://user:password@192.168.1.20:554/stream1">
@@ -401,7 +401,7 @@ function analyticCard(a, rt) {
   return `<div class="an ${a.enabled ? '' : 'off'}"><div class="head"><div><h3>${esc(a.name)}</h3><div class="muted small">${esc(m ? m.name : 'Missing model')} | conf ${a.conf}</div></div>
     <div class="row"><button class="btn small" data-act="edit-an" data-id="${a.id}">Edit</button><button class="btn small danger" data-act="del-an" data-id="${a.id}">Delete</button></div></div>
     <div class="kv">${a.classes.length ? `<span>Classes <b>${esc(a.classes.join(', '))}</b></span>` : '<span>All classes</span>'}${a.roi.length >= 3 ? '<span>Zone <b>on</b></span>' : '<span>Whole frame</span>'}${a.webhook_url ? '<span>Webhook <b>on</b></span>' : ''}</div>
-    <div class="kv">${ruleText(a.rule)}${a.rule.blur_people ? '<span>People <b>blurred</b></span>' : ''}</div>
+    <div class="kv">${ruleText(a.rule)}${a.rule.blur_people ? '<span>Faces <b>blurred</b></span>' : ''}</div>
     ${rt ? (rt.error ? `<div style="color:var(--crit)" class="small">Model error: ${esc(rt.error)}</div>` : `<div class="row small"><span>Now: <b style="font-size:1.1rem">${rt.count}</b> object${rt.count === 1 ? '' : 's'}</span>
       <span class="muted">${rt.infer_ms} ms / frame</span><span class="muted">${Object.entries(rt.labels).map(([k, v]) => k + ' ' + v).join(', ')}</span></div>
       ${rt.tracks_now !== undefined ? `<div class="row small"><span>Tracked now <b>${rt.tracks_now}</b></span>${a.rule.condition === 'unaccompanied' ? `<span>Unaccompanied <b style="color:${rt.alone_now ? 'var(--crit)' : 'inherit'}">${rt.alone_now}</b></span>` : ''}<span class="muted">Unique since start <b>${rt.unique}</b></span></div>` : ''}
@@ -457,7 +457,7 @@ async function analyticForm(cid, a) {
       <div class="two"><div class="field"><label>Companion classes (comma separated)</label><input id="r-comp" value="${esc((r.companions || ['person']).join(', '))}"></div>
       <div class="field"><label>Near means within this many dog-heights</label><input id="r-rad" type="number" min="0.5" max="20" step="0.5" value="${r.companion_radius ?? 3}"></div></div>
     </div>
-    <label style="display:flex;gap:8px;align-items:center;color:var(--ink);margin:-4px 0 14px"><input type="checkbox" id="r-blur" ${r.blur_people ? 'checked' : ''}> Blur people in the live view and alert pictures (privacy)</label>
+    <label style="display:flex;gap:8px;align-items:center;color:var(--ink);margin:-4px 0 14px"><input type="checkbox" id="r-blur" ${r.blur_people ? 'checked' : ''}> Blur faces in the live view and alert pictures (privacy)</label>
     <div class="two"><div class="field"><label>Must hold for (seconds)</label><input id="r-min" type="number" min="0" value="${r.min_seconds}"></div>
     <div class="field"><label>Wait between alerts (seconds)</label><input id="r-cool" type="number" min="0" value="${r.cooldown_seconds}"></div></div>
     <div class="field"><label>Active on</label><div class="days">${DAYS.map((d, i) => `<label><input type="checkbox" class="r-day" value="${i}" ${r.days.includes(i) ? 'checked' : ''}>${d}</label>`).join('')}</div></div>
@@ -509,21 +509,21 @@ async function analyticForm(cid, a) {
 /* ---------------------------------------------------------- models */
 async function pageModels() {
   models = await api('/models');
-  view.innerHTML = `<div class="top"><div><h1>Models</h1><p>${MODE === 'demo' ? 'Add your own YOLO model as an ONNX file. It runs in your browser and stays on your computer.' : 'Register the weights you want to test. Any Ultralytics YOLO file works (.pt, .onnx, .engine).'}</p></div>
+  view.innerHTML = `<div class="top"><div><h1>Models</h1><p>${MODE === 'demo' ? 'Add your own detection model as an ONNX file. It runs in your browser and stays on your computer.' : 'Register the model files you want to test (.onnx, .pt or .engine).'}</p></div>
     <button class="btn primary" data-act="add-model">Add model</button></div>
     <div class="card tablewrap"><table><tr><th>Name</th><th>Type</th><th>File</th><th>Used by</th><th></th></tr>
-    ${models.map(m => `<tr><td><b>${esc(m.name)}</b><div class="muted small">${esc(m.notes)}</div></td><td>${m.builtin === false ? 'Yours (ONNX)' : m.kind === 'motion' || m.kind === 'cocossd' || m.builtin ? 'Built in' : 'Ultralytics'}</td>
-      <td class="mono small">${m.builtin === false ? esc(Math.round(m.bytes / 1e5) / 10 + ' MB, kept in this browser') : m.kind === 'motion' || m.kind === 'cocossd' ? '-' : esc(m.path) + (m.exists ? '' : ' (missing)')}</td><td>${m.in_use} analytic${m.in_use === 1 ? '' : 's'}</td>
+    ${models.map(m => `<tr><td><b>${esc(m.name)}</b><div class="muted small">${esc(m.notes)}</div></td><td>${m.builtin === false ? 'Yours (ONNX)' : m.kind === 'motion' || m.kind === 'cocossd' || m.builtin ? 'Built in' : 'Your model'}</td>
+      <td class="mono small">${m.builtin === false ? esc(Math.round(m.bytes / 1e5) / 10 + ' MB, kept in this browser') : m.kind === 'motion' || m.kind === 'cocossd' || m.builtin ? '-' : esc(m.path) + (m.exists ? '' : ' (missing)')}</td><td>${m.in_use} analytic${m.in_use === 1 ? '' : 's'}</td>
       <td style="text-align:right">${m.builtin === true || m.kind === 'motion' || m.kind === 'cocossd' ? '' : `<button class="btn small danger" data-act="del-model" data-id="${m.id}">Remove</button>`}</td></tr>`).join('')}</table></div>
     <p class="muted small" style="margin-top:14px">To add your own detector type, subclass <span class="mono">Detector</span> in <span class="mono">app/detectors.py</span> and register it in <span class="mono">build_detector</span>.</p>`;
   refreshSide();
 }
 function modelForm() {
   if (MODE === 'demo') {
-    openModal('Add your YOLO model', `
+    openModal('Add your model', `
       <p class="muted small" style="margin-top:0">Your model runs inside this page. The file is stored in your own browser and is never uploaded.
-      Export it as ONNX with a fixed square size, for example <span class="mono">yolo export model=best.pt format=onnx imgsz=640</span>.
-      Ultralytics detection models (YOLOv5u, YOLOv8, YOLO11) are supported. A .pt file cannot run in a browser, and models that already include NMS in the graph are not supported yet.</p>
+      Export your detection model to ONNX with a fixed square input size, for example 640 by 640.
+      A .pt file cannot run in a browser, and models with filtering built into the graph are not supported yet.</p>
       <div class="field"><label>ONNX file (up to 300 MB)</label><input type="file" id="m-file" accept=".onnx"></div>
       <div class="field"><label>Name</label><input id="m-name" placeholder="helmet-v3"></div>
       <div class="field"><label>Class names, only if the file does not contain them (comma separated)</label><input id="m-names" placeholder="helmet, vest, person"></div>

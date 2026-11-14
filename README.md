@@ -68,8 +68,8 @@ compare models on the same footage.
 ## Stray dog monitoring
 
 This adds what a council-style stray dog pilot needs on top of the test bench. The hosted demo has a ready
-**Example: Stray dog monitoring** project (press **Start live demo** on the Projects page). It runs a synthetic
-test clip, labelled as such, so it shows how the system works, not how accurate it is on real cameras.
+**Example: Stray dog monitoring** project (press **Start live demo** on the Projects page). It runs AI-generated
+sample footage of a residential street, labelled as such, so it shows how the system works, not how accurate it is on real cameras.
 
 **Quick start** (server running, see "Run it" above):
 
@@ -86,12 +86,12 @@ What is new:
 | Feature | Where | Notes |
 | --- | --- | --- |
 | Tracking with IDs | `app/tracking.py` | IoU matching with a centre-distance fallback, no extra packages. Gives unique counts and time in view per dog |
-| "An object is alone" rule | Analytic editor, `condition: unaccompanied` | A dog counts only when no person is within N dog-heights (default 3). Red box = alone, grey = with a person |
+| "An object is alone" rule | Analytic editor, `condition: unaccompanied` | A dog counts only when no person is within N dog-heights (default 3). Red box = alone, blue = with a person |
 | Sightings log | `sightings` table | One row per tracked visit: first and last seen, time in view, time alone, largest group, position |
 | Hotspot heatmap | Insights tab, `GET /api/cameras/{id}/heatmap` | Where dogs stood (foot point) over the last day, week or month |
 | Trends | Insights tab, `GET /api/projects/{id}/insights` | Totals, by hour of day, by day, per camera. In the hosted demo the same data is kept in your browser |
 | CSV export | `GET /api/projects/{id}/sightings.csv` | For council reports |
-| Privacy | "Blur people" option on the analytic | People are blurred in the live view, the stored stills and alert pictures |
+| Privacy | "Blur faces" option on the analytic | The head area of each detected person is blurred in the live view, the stored stills and alert pictures. People stay visible otherwise |
 | Login | `APP_PASSWORD=... APP_USER=...` environment variables | HTTP Basic login on every page and API call. Use HTTPS or a VPN in front of it |
 | ONNX models without PyTorch | `app/detectors.py`, `OnnxDetector` | `.onnx` exports of YOLOv5u/v8/11 and end-to-end exports (YOLO26) run with ONNX Runtime |
 | RF-DETR | Register a model with path `rfdetr:medium` (or `rfdetr:medium:/path/best.pth`) | Apache 2.0, safe for a commercial product. Needs `pip install rfdetr`. Written against the rfdetr package API but **not yet tested** in this branch |

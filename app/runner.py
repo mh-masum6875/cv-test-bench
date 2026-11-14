@@ -16,7 +16,7 @@ from .rules import RuleState
 from .tracking import Tracker, is_alone
 
 ALONE = (60, 60, 235)        # BGR red for an unaccompanied target
-WITH = (150, 150, 150)       # grey for a target with a companion nearby
+WITH = (250, 140, 60)        # BGR blue for a target with a companion nearby
 
 os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
 
@@ -319,18 +319,22 @@ class CameraRunner:
         a.heat[:] = 0
 
     def _blur_people(self, frame):
-        """Privacy: blur every companion box (people) for analytics that ask for it."""
+        """Privacy: blur the head area of every person (the top of each companion box)
+        for analytics that ask for it. The rest of the person stays visible."""
         h, w = frame.shape[:2]
         for a in self.analytics:
             if not a.rule.get("blur_people"):
                 continue
             for c in a.last_companions:
-                x1, y1, x2, y2 = [int(v) for v in c["box"]]
+                bx1, by1, bx2, by2 = c["box"]
+                bw, bh = bx2 - bx1, by2 - by1
+                x1, x2 = int(bx1 + 0.12 * bw), int(bx2 - 0.12 * bw)             # head: middle of the box width,
+                y1, y2 = int(by1), int(by1 + max(0.24 * bh, 0.7 * (x2 - x1)))   # top quarter of its height
                 x1, y1, x2, y2 = max(0, x1), max(0, y1), min(w, x2), min(h, y2)
                 if x2 - x1 < 4 or y2 - y1 < 4:
                     continue
                 roi = frame[y1:y2, x1:x2]
-                k = max(15, (min(x2 - x1, y2 - y1) // 3) | 1)       # odd kernel, scaled to the box
+                k = max(9, (min(x2 - x1, y2 - y1) // 2) | 1)        # odd kernel, scaled to the head
                 frame[y1:y2, x1:x2] = cv2.GaussianBlur(roi, (k, k), 0)
 
     def _draw(self, frame):
@@ -351,7 +355,7 @@ class CameraRunner:
                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
                 tag = f' #{d["track_id"]}' if d.get("confirmed") else ""
                 state = (" alone" if d.get("alone") else " with person") if unacc and d.get("confirmed") else ""
-                text = f'{d["label"]}{tag}{state} {d["conf"]:.2f}'
+                text = f'{d["label"]}{tag}{state}'
                 tw, th = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
                 cv2.rectangle(frame, (x1, max(0, y1 - th - 8)), (x1 + tw + 8, y1), color, -1)
                 cv2.putText(frame, text, (x1 + 4, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (15, 15, 15), 1, cv2.LINE_AA)

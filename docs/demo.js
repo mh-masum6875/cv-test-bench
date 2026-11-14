@@ -9,10 +9,10 @@
   const HEAT_W = 32, HEAT_H = 18, STILLS = 'cvtb:stills';
   const COLORS = ['#2ebeaa', '#3c8cfa', '#faaa3c', '#c85adc', '#5ac85a', '#5050f0'];
   const MODELS = [
-    { id: 1, name: 'Motion detector (in browser)', kind: 'motion', path: '', notes: 'Background subtraction in JavaScript. Needs no weights.' },
-    { id: 2, name: 'COCO-SSD (in browser, 80 everyday objects)', kind: 'cocossd', path: '', notes: 'TensorFlow.js SSD MobileNet. Loads once, about 14 MB, then runs offline.' },
-    { id: 3, name: 'YOLOv8n (in browser, 80 everyday classes)', kind: 'yolo', path: 'models/yolo/yolov8n-416.onnx', names: 'models/yolo/coco-names.json', notes: 'Ultralytics YOLOv8 nano, COCO classes, ONNX at 416 pixels. AGPL-3.0.' },
-    { id: 4, name: 'YOLOv8n Open Images (in browser, 601 classes)', kind: 'yolo', path: 'models/yolo/yolov8n-oiv7-416.onnx', names: 'models/yolo/oiv7-names.json', notes: 'Ultralytics YOLOv8 nano trained on Open Images V7. Knows helmets, boats, hats, bottles and many more. AGPL-3.0.' }
+    { id: 1, name: 'Motion detector', kind: 'motion', path: '', notes: 'Finds anything that moves. Needs no trained model.' },
+    { id: 2, name: 'Light object detector (80 everyday objects)', kind: 'cocossd', path: '', notes: 'Fast and small. Loads once, about 14 MB, then runs offline.' },
+    { id: 3, name: 'Object detector (80 everyday objects)', kind: 'yolo', path: 'models/yolo/yolov8n-416.onnx', names: 'models/yolo/coco-names.json', notes: 'General detector for people, vehicles, animals and everyday objects. Runs in the browser.' },
+    { id: 4, name: 'Object detector, extended (601 object types)', kind: 'yolo', path: 'models/yolo/yolov8n-oiv7-416.onnx', names: 'models/yolo/oiv7-names.json', notes: 'Knows many more object types, such as helmets, boats, hats and bottles. Runs in the browser.' }
   ];
   const FILES = {};            // uploaded videos live in memory only
   const runners = {};
@@ -34,16 +34,34 @@
   }
   /* Ready-made examples that mirror the areas in my applied computer vision repositories.
      They use open YOLO models and CC BY 4.0 sample footage, so they show the idea, not my client models. */
+  const STRAY = { name: 'Example: Stray dog monitoring', camera: 'Residential street (AI-generated footage)',
+    description: 'Flags a dog only when no person is near it (a pet on a leash stays grey, a stray alone turns red), tracks each dog with an ID, blurs faces, '
+      + 'and builds hotspots and trends on the Insights tab. The footage is AI-generated sample video of a Shah Alam street, so it shows how the system works, '
+      + 'not how accurate it is on real cameras. The detector here is a small general model; a pilot would use one trained on local footage.' };
   function addPresets() {
-    if (S.presets === 3) return;
+    if (S.presets === 3) {                                       // earlier visitors: refresh the stray example text, then fall through
+      S.projects.forEach(p => { p.description = (p.description || '').replace(' The detector is YOLOv8n from Ultralytics.', '').replace('a dedicated PPE model', 'a dedicated safety-gear model'); });
+      const p = S.projects.find(x => x.name === STRAY.name);
+      if (p) { p.description = STRAY.description; const c = S.cameras.find(x => x.project_id === p.id); if (c) c.name = STRAY.camera; }
+      S.presets = 5; save(); return;
+    }
+    if (S.presets === 4) {                                       // remove model names from the older example texts
+      S.projects.forEach(p => { p.description = (p.description || '').replace(' The detector is YOLOv8n from Ultralytics.', '').replace('a dedicated PPE model', 'a dedicated safety-gear model'); });
+      S.presets = 5; save(); return;
+    }
+    if (S.presets === 5) return;
     const t = Date.now() / 1000, rule = (o) => ({ ...DEFAULT_RULE, ...o });
     const mk = (name, description, camName, sample, an) => {
       const p = { id: nid('p'), name, description, created_at: t }; S.projects.push(p);
       const c = { id: nid('c'), project_id: p.id, name: camName, source_type: 'sample', source: 'samples/' + sample, enabled: 0, fps_limit: 4, created_at: t }; S.cameras.push(c);
       an.forEach(a => S.analytics.push({ id: nid('a'), camera_id: c.id, enabled: 1, webhook_url: '', created_at: t, classes: [], roi: [], ...a, rule: rule(a.rule) }));
     };
-    if (S.presets === 2) { addStray(mk); S.presets = 3; save(); return; }
-    mk('Example: Workplace safety', 'Raise an alert when a person walks into a marked floor zone. Press Start on the camera. The detector is YOLOv8n from Ultralytics. Checking hard hats needs a dedicated PPE model, which the server version can load.',
+    if (S.presets === 2) {
+      addStray(mk);
+      S.projects.forEach(p => { p.description = (p.description || '').replace(' The detector is YOLOv8n from Ultralytics.', '').replace('a dedicated PPE model', 'a dedicated safety-gear model'); });
+      S.presets = 5; save(); return;
+    }
+    mk('Example: Workplace safety', 'Raise an alert when a person walks into a marked floor zone. Press Start on the camera. Checking hard hats needs a dedicated safety-gear model, which the server version can load.',
       'Warehouse floor', 'safety', [{ name: 'Person in the marked zone', model_id: 3, conf: 0.35, classes: ['person'], roi: [[0.06, 0.34], [0.58, 0.2], [0.93, 0.58], [0.5, 0.98], [0.02, 0.8]], rule: { min_seconds: 1, cooldown_seconds: 8, severity: 'critical' } }]);
     mk('Example: Traffic', 'Warn when the road is busy: two or more vehicles in view for a couple of seconds. Cars, trucks, buses and motorbikes are counted.',
       'Road from above', 'traffic', [{ name: 'Busy road', model_id: 3, conf: 0.3, classes: ['car', 'truck', 'bus', 'motorcycle'], rule: { count: 2, min_seconds: 2, cooldown_seconds: 10, severity: 'warning' } }]);
@@ -52,12 +70,10 @@
     mk('Example: Sorting and counting', 'Count items on a table. This one counts bottles, the same idea as counting recyclables or products on a line.',
       'Table', 'bottles', [{ name: 'Two or more bottles', model_id: 3, conf: 0.3, classes: ['bottle'], rule: { count: 2, min_seconds: 1, cooldown_seconds: 10, severity: 'info' } }]);
     addStray(mk);
-    S.presets = 3; save();
+    S.presets = 5; save();
   }
   function addStray(mk) {
-    mk('Example: Stray dog monitoring', 'Flags a dog only when no person is near it, tracks each dog with an ID, blurs people, and builds hotspots and trends on the Insights tab. '
-      + 'The clip is a synthetic test scene (a photo of a dog and a person moved across a drawn street), so it shows how the system works, not how accurate it is on real cameras.',
-      'Street camera (synthetic test clip)', 'stray', [{ name: 'Unaccompanied dog', model_id: 3, conf: 0.3, classes: ['dog'],
+    mk(STRAY.name, STRAY.description, STRAY.camera, 'stray', [{ name: 'Unaccompanied dog', model_id: 3, conf: 0.3, classes: ['dog'],
         rule: { condition: 'unaccompanied', min_seconds: 2, cooldown_seconds: 15, severity: 'warning', companions: ['person'], companion_radius: 3, blur_people: true } }]);
   }
 
@@ -427,11 +443,12 @@
       if (!boxes.length) return;
       if (!this.tmp) this.tmp = document.createElement('canvas');      // a canvas cannot be blurred onto itself
       this.tmp.width = w; this.tmp.height = h; this.tmp.getContext('2d').drawImage(this.work, 0, 0);
-      for (const b of boxes) {
-        const [x1, y1, x2, y2] = b.map(Math.round), bw = x2 - x1, bh = y2 - y1;
-        if (bw < 4 || bh < 4) continue;
+      for (const b of boxes) {                                         // blur the head area only: middle of the width, top quarter
+        const W = b[2] - b[0], H = b[3] - b[1], x1 = Math.round(b[0] + 0.12 * W), x2 = Math.round(b[2] - 0.12 * W);
+        const y1 = Math.round(b[1]), y2 = Math.round(b[1] + Math.max(0.24 * H, 0.7 * (x2 - x1))), bw = x2 - x1, bh = y2 - y1;
+        if (bw < 3 || bh < 3) continue;
         this.wg.save(); this.wg.beginPath(); this.wg.rect(x1, y1, bw, bh); this.wg.clip();
-        this.wg.filter = `blur(${Math.max(6, Math.round(Math.min(bw, bh) / 6))}px)`; this.wg.drawImage(this.tmp, 0, 0); this.wg.restore();
+        this.wg.filter = `blur(${Math.max(4, Math.round(Math.min(bw, bh) / 3))}px)`; this.wg.drawImage(this.tmp, 0, 0); this.wg.restore();
       }
     }
     draw(w, h) {
@@ -445,12 +462,12 @@
         }
         const unacc = a.rule.condition === 'unaccompanied';
         for (const d of a.dets) {
-          const color = unacc && d.confirmed ? (d.alone ? '#eb3c3c' : '#969696') : a.color;
+          const color = unacc && d.confirmed ? (d.alone ? '#eb3c3c' : '#3c8cfa') : a.color;
           const [x1, y1, x2, y2] = d.box; g.strokeStyle = color; g.strokeRect(x1, y1, x2 - x1, y2 - y1);
-          const text = `${d.label}${d.confirmed ? ' #' + d.track_id : ''}${unacc && d.confirmed ? (d.alone ? ' alone' : ' with person') : ''} ${d.conf.toFixed(2)}`, tw = g.measureText(text).width;
+          const text = `${d.label}${d.confirmed ? ' #' + d.track_id : ''}${unacc && d.confirmed ? (d.alone ? ' alone' : ' with person') : ''}`, tw = g.measureText(text).width;
           g.fillStyle = color; g.fillRect(x1, Math.max(0, y1 - 18), tw + 8, 18); g.fillStyle = '#0d1115'; g.fillText(text, x1 + 4, Math.max(13, y1 - 5));
         }
-        if (a.loading) { g.fillStyle = 'rgba(0,0,0,.6)'; g.fillRect(0, 0, w, 24); g.fillStyle = '#fff'; g.fillText('Loading the COCO-SSD model (first time only)...', 8, 16); }
+        if (a.loading) { g.fillStyle = 'rgba(0,0,0,.6)'; g.fillRect(0, 0, w, 24); g.fillStyle = '#fff'; g.fillText('Loading the detector (first time only)...', 8, 16); }
       }
       g.fillStyle = '#fff'; g.font = '12px system-ui'; g.fillText(new Date().toLocaleString(), 8, h - 8);
     }

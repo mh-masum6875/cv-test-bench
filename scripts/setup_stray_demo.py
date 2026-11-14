@@ -65,7 +65,7 @@ def main():
             from make_stray_demo_video import main as make
             make(a.video)
 
-    model = call(a.server, "POST", "/models", {"name": Path(a.model).name if ":" not in a.model[:8] else a.model,
+    model = call(a.server, "POST", "/models", {"name": "Dog detector",
                                                  "path": a.model, "notes": "Added by setup_stray_demo.py"})
     project = call(a.server, "POST", "/projects", {
         "name": a.name, "description": "Unaccompanied dog detection with hotspots and trends. People are blurred."})

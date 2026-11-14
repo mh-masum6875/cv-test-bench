@@ -59,7 +59,7 @@ DEFAULT_RULE = {
     # no companion (for example a person) is within `companion_radius` target-heights of it
     "companions": ["person"],
     "companion_radius": 3.0,
-    "blur_people": False,       # blur people in the live view and alert snapshots (privacy)
+    "blur_people": False,       # blur faces (head area of each person) in the live view and snapshots
 }
 
 HEAT_W, HEAT_H = 32, 18         # heatmap grid, cells across and down
