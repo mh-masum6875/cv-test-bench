@@ -4,7 +4,9 @@
 (function () {
   const KEY = 'cvtb:v1';
   const COCO = ['person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat', 'traffic light', 'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe', 'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee', 'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat', 'baseball glove', 'skateboard', 'surfboard', 'tennis racket', 'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch', 'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop', 'mouse', 'remote', 'keyboard', 'cell phone', 'microwave', 'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush'];
-  const DEFAULT_RULE = { condition: 'count_gte', count: 1, min_seconds: 3, cooldown_seconds: 30, severity: 'warning', days: [0, 1, 2, 3, 4, 5, 6], start: '00:00', end: '23:59' };
+  const DEFAULT_RULE = { condition: 'count_gte', count: 1, min_seconds: 3, cooldown_seconds: 30, severity: 'warning', days: [0, 1, 2, 3, 4, 5, 6], start: '00:00', end: '23:59',
+    companions: ['person'], companion_radius: 3, blur_people: false };
+  const HEAT_W = 32, HEAT_H = 18, STILLS = 'cvtb:stills';
   const COLORS = ['#2ebeaa', '#3c8cfa', '#faaa3c', '#c85adc', '#5ac85a', '#5050f0'];
   const MODELS = [
     { id: 1, name: 'Motion detector (in browser)', kind: 'motion', path: '', notes: 'Background subtraction in JavaScript. Needs no weights.' },
@@ -33,13 +35,14 @@
   /* Ready-made examples that mirror the areas in my applied computer vision repositories.
      They use open YOLO models and CC BY 4.0 sample footage, so they show the idea, not my client models. */
   function addPresets() {
-    if (S.presets === 2) return;
+    if (S.presets === 3) return;
     const t = Date.now() / 1000, rule = (o) => ({ ...DEFAULT_RULE, ...o });
     const mk = (name, description, camName, sample, an) => {
       const p = { id: nid('p'), name, description, created_at: t }; S.projects.push(p);
       const c = { id: nid('c'), project_id: p.id, name: camName, source_type: 'sample', source: 'samples/' + sample, enabled: 0, fps_limit: 4, created_at: t }; S.cameras.push(c);
       an.forEach(a => S.analytics.push({ id: nid('a'), camera_id: c.id, enabled: 1, webhook_url: '', created_at: t, classes: [], roi: [], ...a, rule: rule(a.rule) }));
     };
+    if (S.presets === 2) { addStray(mk); S.presets = 3; save(); return; }
     mk('Example: Workplace safety', 'Raise an alert when a person walks into a marked floor zone. Press Start on the camera. The detector is YOLOv8n from Ultralytics. Checking hard hats needs a dedicated PPE model, which the server version can load.',
       'Warehouse floor', 'safety', [{ name: 'Person in the marked zone', model_id: 3, conf: 0.35, classes: ['person'], roi: [[0.06, 0.34], [0.58, 0.2], [0.93, 0.58], [0.5, 0.98], [0.02, 0.8]], rule: { min_seconds: 1, cooldown_seconds: 8, severity: 'critical' } }]);
     mk('Example: Traffic', 'Warn when the road is busy: two or more vehicles in view for a couple of seconds. Cars, trucks, buses and motorbikes are counted.',
@@ -48,7 +51,14 @@
       'Shop aisle', 'retail', [{ name: 'Customer in the aisle', model_id: 3, conf: 0.3, classes: ['person'], rule: { min_seconds: 3, cooldown_seconds: 15, severity: 'info' } }]);
     mk('Example: Sorting and counting', 'Count items on a table. This one counts bottles, the same idea as counting recyclables or products on a line.',
       'Table', 'bottles', [{ name: 'Two or more bottles', model_id: 3, conf: 0.3, classes: ['bottle'], rule: { count: 2, min_seconds: 1, cooldown_seconds: 10, severity: 'info' } }]);
-    S.presets = 2; save();
+    addStray(mk);
+    S.presets = 3; save();
+  }
+  function addStray(mk) {
+    mk('Example: Stray dog monitoring', 'Flags a dog only when no person is near it, tracks each dog with an ID, blurs people, and builds hotspots and trends on the Insights tab. '
+      + 'The clip is a synthetic test scene (a photo of a dog and a person moved across a drawn street), so it shows how the system works, not how accurate it is on real cameras.',
+      'Street camera (synthetic test clip)', 'stray', [{ name: 'Unaccompanied dog', model_id: 3, conf: 0.3, classes: ['dog'],
+        rule: { condition: 'unaccompanied', min_seconds: 2, cooldown_seconds: 15, severity: 'warning', companions: ['person'], companion_radius: 3, blur_people: true } }]);
   }
 
   function load() { try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && s.v === 1) return s; } catch (e) { } return seed(); }
@@ -57,7 +67,7 @@
       try { localStorage.setItem(KEY, JSON.stringify(S)); return; } catch (e) { S.alerts = S.alerts.slice(-Math.max(5, 40 >> i)); }
     }
   }
-  const nid = k => S.nid[k]++;
+  const nid = k => { if (!S.nid[k]) S.nid[k] = 1; return S.nid[k]++; };
   const find = (arr, id) => arr.find(x => x.id === id);
   const err = (m, code) => Object.assign(new Error(m), { code });
 
@@ -74,14 +84,18 @@
     update(rule, count, ts, now) {
       rule = { ...DEFAULT_RULE, ...(rule || {}) };
       if (!inSchedule(rule, now)) { this.since = null; return null; }
-      const holds = rule.condition === 'absent' ? count === 0 : count >= Math.max(1, +rule.count || 1);
+      const holds = rule.condition === 'absent' ? count === 0 : count >= Math.max(1, +rule.count || 1);   // unaccompanied: count = dogs alone
       if (!holds) { this.since = null; return null; }
       if (this.since === null) this.since = ts;
       const held = ts - this.since;
       if (held < +rule.min_seconds) return null;
       if (this.last !== null && ts - this.last < +rule.cooldown_seconds) return null;
       this.last = ts;
-      return { message: rule.condition === 'absent' ? `Nothing detected for ${Math.round(held)}s` : `${count} object(s) present for ${Math.round(held)}s`, severity: rule.severity, held: Math.round(held * 10) / 10 };
+      const name = rule.target_name || 'object';
+      const message = rule.condition === 'absent' ? `Nothing detected for ${Math.round(held)}s`
+        : rule.condition === 'unaccompanied' ? `${count} unaccompanied ${name}${count > 1 ? 's' : ''} for ${Math.round(held)}s`
+        : `${count} object(s) present for ${Math.round(held)}s`;
+      return { message, severity: rule.severity, held: Math.round(held * 10) / 10 };
     }
   }
 
@@ -239,6 +253,44 @@
     return c;
   }
 
+  /* ---------- tracking (port of app/tracking.py) ---------- */
+  const centre = b => [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2];
+  class Tracker {
+    constructor(o = {}) { this.iouMin = o.iouMin || 0.2; this.distMax = o.distMax || 1.5; this.maxAge = o.maxAge || 3; this.minHits = o.minHits || 2; this.tracks = []; this.next = 1; }
+    update(dets, ts) {
+      const pairs = [];
+      this.tracks.forEach((t, ti) => dets.forEach((d, di) => {
+        if (d.label !== t.label) return;
+        const o = iou(t.box, d.box);
+        if (o >= this.iouMin) { pairs.push([1 + o, ti, di]); return; }
+        const [tx, ty] = centre(t.box), [dx, dy] = centre(d.box), size = Math.max(t.box[2] - t.box[0], t.box[3] - t.box[1], 1);
+        const dist = Math.hypot(tx - dx, ty - dy) / size;
+        if (dist <= this.distMax) pairs.push([1 - dist / (this.distMax + 1e-9), ti, di]);
+      }));
+      pairs.sort((a, b) => b[0] - a[0]);
+      const usedT = new Set(), usedD = new Set();
+      for (const [, ti, di] of pairs) {
+        if (usedT.has(ti) || usedD.has(di)) continue;
+        usedT.add(ti); usedD.add(di); const t = this.tracks[ti], d = dets[di];
+        t.box = d.box.slice(); t.conf = d.conf; t.prev = t.last; t.last = ts; t.hits++; t.seen++; d.track_id = t.id;
+      }
+      dets.forEach((d, di) => { if (usedD.has(di)) return;
+        const t = { id: this.next++, label: d.label, box: d.box.slice(), conf: d.conf, first: ts, last: ts, prev: ts, hits: 1, seen: 1, aloneFrames: 0, aloneSec: 0, alone: false, group: 1, pts: [] };
+        this.tracks.push(t); d.track_id = t.id; });
+      const ended = this.tracks.filter(t => ts - t.last > this.maxAge && t.hits >= this.minHits);
+      this.tracks = this.tracks.filter(t => ts - t.last <= this.maxAge);
+      return { live: this.tracks.filter(t => t.last === ts), ended };
+    }
+    flush() { const e = this.tracks.filter(t => t.hits >= this.minHits); this.tracks = []; return e; }
+  }
+  function isAlone(box, companions, radius) {
+    const [cx, cy] = centre(box), reach = Math.max(box[3] - box[1], box[2] - box[0], 1) * radius;
+    return !companions.some(c => Math.hypot(cx - Math.min(Math.max(cx, c[0]), c[2]), cy - Math.min(Math.max(cy, c[1]), c[3])) <= reach);
+  }
+  const dayKey = ts => { const d = new Date(ts * 1000); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+  let stills = {}; try { stills = JSON.parse(localStorage.getItem(STILLS)) || {}; } catch (e) { }
+  const saveStills = () => { try { localStorage.setItem(STILLS, JSON.stringify(stills)); } catch (e) { } };
+
   /* ---------- one runner per camera ---------- */
   class Runner {
     constructor(cam) {
@@ -274,6 +326,7 @@
       } catch (e) { this.status = 'error'; this.message = e.message || String(e); this.drawStatus(this.message.length > 70 ? this.message.slice(0, 67) + '...' : this.message); }
     }
     stop() {
+      (this.analytics || []).forEach(a => { if (a.tracker) this.endTracks(a, a.tracker.flush()); });
       this.stopped = true; this.status = 'stopped'; try { this.video.pause(); } catch (e) { }
       if (this.video.srcObject) this.video.srcObject.getTracks().forEach(t => t.stop());
       if (this.hls) this.hls.destroy(); this.drawStatus('Stopped. Press Start.');
@@ -287,9 +340,12 @@
       });
     }
     loadAnalytics() {
+      (this.analytics || []).forEach(a => this.endTracks(a, a.tracker ? a.tracker.flush() : []));
       this.analytics = S.analytics.filter(a => a.camera_id === this.id && a.enabled).map((row, i) => {
         const model = find(allModels(), row.model_id);
-        const a = { row, color: COLORS[i % COLORS.length], state: new RuleState(), rule: row.rule, classes: row.classes.map(x => x.toLowerCase()), count: 0, infer_ms: 0, total: 0, labels: {}, history: [], dets: [], error: null, det: null };
+        const rule = { ...DEFAULT_RULE, ...(row.rule || {}) };
+        const a = { row, color: COLORS[i % COLORS.length], state: new RuleState(), rule, classes: row.classes.map(x => x.toLowerCase()), count: 0, infer_ms: 0, total: 0, labels: {}, history: [], dets: [], error: null, det: null,
+          companions: (rule.companions || []).map(x => x.toLowerCase()), comp: [], tracker: new Tracker(), tracks_now: 0, alone_now: 0, unique: 0, counted: new Set() };
         try { if (!model) throw new Error('Model was deleted'); a.det = model.kind === 'cocossd' ? new Coco() : model.kind === 'yolo' ? new Yolo(model) : new Motion(); } catch (e) { a.error = e.message; }
         return a;
       });
@@ -301,7 +357,6 @@
       if (this.reloadFlag) this.loadAnalytics();
       const scale = Math.min(1, 640 / v.videoWidth), w = Math.round(v.videoWidth * scale), h = Math.round(v.videoHeight * scale);
       this.work.width = w; this.work.height = h; this.wg.drawImage(v, 0, 0, w, h); this.size = [v.videoWidth, v.videoHeight];
-      this.raw = this.work.toDataURL('image/jpeg', 0.7);
       const now = Date.now() / 1000, date = new Date();
       for (const a of this.analytics) {
         if (!a.det) continue;
@@ -309,20 +364,75 @@
         try { dets = await a.det.detect(this.work, w, h, +a.row.conf); a.error = null; } catch (e) { a.error = e.message; }
         a.infer_ms = performance.now() - t;
         a.loading = a.det.loading;
+        a.comp = dets.filter(d => a.companions.includes(d.label.toLowerCase()));
         dets = dets.filter(d => (!a.classes.length || a.classes.includes(d.label.toLowerCase())) && inside(d.box, a.row.roi, w, h));
-        a.dets = dets; a.count = dets.length; a.total += dets.length; a.labels = {};
+        this.track(a, dets, now, w, h);
+        a.dets = dets; a.count = a.rule.condition === 'unaccompanied' ? a.alone_now : dets.length; a.total += dets.length; a.labels = {};
         dets.forEach(d => a.labels[d.label] = (a.labels[d.label] || 0) + 1);
         a.history.push([now, a.count, a.infer_ms]); if (a.history.length > 180) a.history.shift();
       }
+      this.blur(w, h);
+      this.raw = this.work.toDataURL('image/jpeg', 0.7);
+      const ready = this.analytics.every(a => !a.det || (!a.det.loading && a.infer_ms > 0 && !a.error));   // wait for the model so people are blurred
+      if (ready && (!this.stillTs || now - this.stillTs > 60)) { this.stillTs = now; stills[this.id] = this.raw; saveStills(); }
       this.draw(w, h);
       for (const a of this.analytics) {
         if (!a.det) continue;
-        const fired = a.state.update(a.rule, a.count, now, date);
+        const fired = a.state.update({ ...a.rule, target_name: a.classes[0] || 'object' }, a.count, now, date);
         if (fired) this.alert(a, fired);
       }
       this.outN++;
       const el = (performance.now() - this.t0) / 1000;
       if (el >= 2) { this.fps_out = this.outN / el; this.fps_in = this.frames / el; this.outN = 0; this.frames = 0; this.t0 = performance.now(); }
+    }
+    track(a, dets, ts, w, h) {
+      const { live, ended } = a.tracker.update(dets, ts), check = a.rule.condition === 'unaccompanied', radius = +a.rule.companion_radius || 3;
+      const people = a.comp.map(c => c.box), conf = live.filter(t => t.hits >= a.tracker.minHits), heat = this.heatFor(ts);
+      let alone = 0;
+      for (const t of conf) {
+        const was = t.alone; t.alone = check && isAlone(t.box, people, radius);
+        if (t.alone) { t.aloneFrames++; alone++; if (was) t.aloneSec += Math.min(ts - t.prev, a.tracker.maxAge); }
+        t.group = Math.max(t.group, conf.length);
+        const fx = Math.min(Math.max((t.box[0] + t.box[2]) / 2 / w, 0), 0.9999), fy = Math.min(Math.max(t.box[3] / h, 0), 0.9999);
+        t.pts.push([fx, fy]); heat[Math.floor(fy * HEAT_H) * HEAT_W + Math.floor(fx * HEAT_W)]++;
+        if (!a.counted.has(t.id)) { a.counted.add(t.id); a.unique++; }
+      }
+      const byId = new Map(conf.map(t => [t.id, t]));
+      dets.forEach(d => { const t = byId.get(d.track_id); d.confirmed = !!t; d.alone = !!(t && t.alone); });
+      a.tracks_now = conf.length; a.alone_now = alone;
+      this.endTracks(a, ended);
+    }
+    heatFor(ts) {
+      S.heat = S.heat || {}; const cam = S.heat[this.id] = S.heat[this.id] || {}, k = dayKey(ts);
+      if (!cam[k]) { cam[k] = new Array(HEAT_W * HEAT_H).fill(0); const keys = Object.keys(cam).sort(); while (keys.length > 31) delete cam[keys.shift()]; }
+      return cam[k];
+    }
+    endTracks(a, ended) {
+      if (!ended.length) return;
+      S.sightings = S.sightings || [];
+      const hold = Math.max(1, +a.rule.min_seconds || 0);
+      for (const t of ended) {
+        const share = t.aloneFrames / Math.max(1, t.seen), pts = t.pts.length ? t.pts : [[0.5, 0.5]];
+        S.sightings.push({ id: nid('s'), project_id: this.cam.project_id, camera_id: this.id, analytics_id: a.row.id, track_id: t.id, label: t.label,
+          first_ts: t.first, last_ts: t.last, duration: Math.round((t.last - t.first) * 10) / 10, alone_share: Math.round(share * 100) / 100, alone_seconds: Math.round(t.aloneSec * 10) / 10,
+          unaccompanied: a.rule.condition === 'unaccompanied' && (t.aloneSec >= hold || share >= 0.5) ? 1 : 0, group_max: t.group,
+          cx: +(pts.reduce((s, p) => s + p[0], 0) / pts.length).toFixed(4), cy: +(pts.reduce((s, p) => s + p[1], 0) / pts.length).toFixed(4), conf: t.conf });
+      }
+      if (S.sightings.length > 3000) S.sightings = S.sightings.slice(-3000);
+      save();
+    }
+    blur(w, h) {
+      const boxes = [];
+      for (const a of this.analytics) if (a.rule.blur_people) a.comp.forEach(c => boxes.push(c.box));
+      if (!boxes.length) return;
+      if (!this.tmp) this.tmp = document.createElement('canvas');      // a canvas cannot be blurred onto itself
+      this.tmp.width = w; this.tmp.height = h; this.tmp.getContext('2d').drawImage(this.work, 0, 0);
+      for (const b of boxes) {
+        const [x1, y1, x2, y2] = b.map(Math.round), bw = x2 - x1, bh = y2 - y1;
+        if (bw < 4 || bh < 4) continue;
+        this.wg.save(); this.wg.beginPath(); this.wg.rect(x1, y1, bw, bh); this.wg.clip();
+        this.wg.filter = `blur(${Math.max(6, Math.round(Math.min(bw, bh) / 6))}px)`; this.wg.drawImage(this.tmp, 0, 0); this.wg.restore();
+      }
     }
     draw(w, h) {
       this.out.width = w; this.out.height = h; const g = this.out.getContext('2d'); g.drawImage(this.work, 0, 0);
@@ -333,10 +443,12 @@
           g.beginPath(); roi.forEach((p, i) => i ? g.lineTo(p[0] * w, p[1] * h) : g.moveTo(p[0] * w, p[1] * h)); g.closePath();
           g.globalAlpha = 0.12; g.fillStyle = a.color; g.fill(); g.globalAlpha = 1; g.strokeStyle = a.color; g.stroke();
         }
+        const unacc = a.rule.condition === 'unaccompanied';
         for (const d of a.dets) {
-          const [x1, y1, x2, y2] = d.box; g.strokeStyle = a.color; g.strokeRect(x1, y1, x2 - x1, y2 - y1);
-          const text = `${d.label} ${d.conf.toFixed(2)}`, tw = g.measureText(text).width;
-          g.fillStyle = a.color; g.fillRect(x1, Math.max(0, y1 - 18), tw + 8, 18); g.fillStyle = '#0d1115'; g.fillText(text, x1 + 4, Math.max(13, y1 - 5));
+          const color = unacc && d.confirmed ? (d.alone ? '#eb3c3c' : '#969696') : a.color;
+          const [x1, y1, x2, y2] = d.box; g.strokeStyle = color; g.strokeRect(x1, y1, x2 - x1, y2 - y1);
+          const text = `${d.label}${d.confirmed ? ' #' + d.track_id : ''}${unacc && d.confirmed ? (d.alone ? ' alone' : ' with person') : ''} ${d.conf.toFixed(2)}`, tw = g.measureText(text).width;
+          g.fillStyle = color; g.fillRect(x1, Math.max(0, y1 - 18), tw + 8, 18); g.fillStyle = '#0d1115'; g.fillText(text, x1 + 4, Math.max(13, y1 - 5));
         }
         if (a.loading) { g.fillStyle = 'rgba(0,0,0,.6)'; g.fillRect(0, 0, w, 24); g.fillStyle = '#fff'; g.fillText('Loading the COCO-SSD model (first time only)...', 8, 16); }
       }
@@ -352,7 +464,8 @@
     }
     public() {
       return { id: this.id, status: this.status, message: this.message, fps_in: +this.fps_in.toFixed(1), fps_out: +this.fps_out.toFixed(1), size: this.size,
-        analytics: this.analytics.map(a => ({ id: a.row.id, name: a.row.name, count: a.count, infer_ms: +a.infer_ms.toFixed(1), total: a.total, labels: a.labels, error: a.error, history: a.history.map(h => [+(h[0] % 100000).toFixed(1), h[1], +h[2].toFixed(1)]) })) };
+        analytics: this.analytics.map(a => ({ id: a.row.id, name: a.row.name, count: a.count, infer_ms: +a.infer_ms.toFixed(1), total: a.total, labels: a.labels, error: a.error,
+          tracks_now: a.tracks_now, alone_now: a.alone_now, unique: a.unique, history: a.history.map(h => [+(h[0] % 100000).toFixed(1), h[1], +h[2].toFixed(1)]) })) };
     }
   }
 
@@ -405,7 +518,8 @@
     FILES[c.id] = f; S.cameras.push(c); save(); return cameraView(c);
   });
   R('PUT', '/cameras/(\\d+)', (m, o) => { const c = find(S.cameras, +m[1]); if (!c) throw err('Camera not found', 404); Object.assign(c, { name: o.json.name.trim(), fps_limit: +o.json.fps_limit || 5 }); if (o.json.file) { FILES[c.id] = o.json.file; c.source = o.json.file.name; } if (c.source_type === 'rtsp' || c.source_type === 'url') c.source = o.json.source.trim(); save(); if (runners[c.id]) startRunner(c.id); return cameraView(c); });
-  function delCamera(id) { stopRunner(id); delete FILES[id]; S.analytics = S.analytics.filter(a => a.camera_id !== id); S.alerts = S.alerts.filter(a => a.camera_id !== id); S.cameras = S.cameras.filter(c => c.id !== id); }
+  function delCamera(id) { stopRunner(id); delete FILES[id]; S.analytics = S.analytics.filter(a => a.camera_id !== id); S.alerts = S.alerts.filter(a => a.camera_id !== id);
+    S.sightings = (S.sightings || []).filter(x => x.camera_id !== id); if (S.heat) delete S.heat[id]; delete stills[id]; saveStills(); S.cameras = S.cameras.filter(c => c.id !== id); }
   R('DELETE', '/cameras/(\\d+)', m => { delCamera(+m[1]); save(); return { ok: true }; });
   R('POST', '/cameras/(\\d+)/start', m => { if (!startRunner(+m[1])) throw err('Camera not found', 404); return cameraView(find(S.cameras, +m[1])); });
   R('POST', '/cameras/(\\d+)/stop', m => { stopRunner(+m[1]); return cameraView(find(S.cameras, +m[1])); });
@@ -456,6 +570,42 @@
   R('POST', '/projects/(\\d+)/alerts/ack-all', m => { S.alerts.forEach(a => { if (a.project_id === +m[1]) a.acked = 1; }); save(); return { ok: true }; });
   R('DELETE', '/projects/(\\d+)/alerts', m => { S.alerts = S.alerts.filter(a => a.project_id !== +m[1]); save(); return { ok: true }; });
 
+  /* ---------- insights (port of the server endpoints) ---------- */
+  const since = days => Date.now() / 1000 - Math.max(0.01, +days || 7) * 86400;
+  function insights(pid, days) {
+    const rows = (S.sightings || []).filter(r => r.project_id === pid && r.first_ts >= since(days));
+    const byHour = new Array(24).fill(0), byDay = {}, perCam = {};
+    for (const r of rows) {
+      const d = new Date(r.first_ts * 1000); byHour[d.getHours()]++;
+      const k = dayKey(r.first_ts), e = byDay[k] = byDay[k] || { date: k, sightings: 0, unaccompanied: 0 }; e.sightings++; e.unaccompanied += r.unaccompanied;
+      const c = perCam[r.camera_id] = perCam[r.camera_id] || { camera_id: r.camera_id, name: (find(S.cameras, r.camera_id) || {}).name || 'Camera removed', sightings: 0, unaccompanied: 0, dwell: 0, group_max: 0 };
+      c.sightings++; c.unaccompanied += r.unaccompanied; c.dwell += r.duration || 0; c.group_max = Math.max(c.group_max, r.group_max || 1);
+    }
+    Object.values(perCam).forEach(c => { c.avg_dwell = Math.round(c.dwell / Math.max(1, c.sightings) * 10) / 10; delete c.dwell; });
+    const n = rows.length;
+    return { days, totals: { sightings: n, unaccompanied: rows.reduce((s, r) => s + r.unaccompanied, 0), avg_dwell: Math.round(rows.reduce((s, r) => s + (r.duration || 0), 0) / Math.max(1, n) * 10) / 10,
+        group_max: rows.reduce((m, r) => Math.max(m, r.group_max || 1), 0), busiest_hour: n ? byHour.indexOf(Math.max(...byHour)) : null },
+      by_hour: byHour, by_day: Object.keys(byDay).sort().map(k => byDay[k]), cameras: Object.values(perCam).sort((a, b) => b.sightings - a.sightings) };
+  }
+  const sightingsOf = (pid, days, limit) => (S.sightings || []).filter(r => r.project_id === pid && r.first_ts >= since(days)).slice().reverse().slice(0, limit || 200)
+    .map(r => ({ ...r, camera_name: (find(S.cameras, r.camera_id) || {}).name }));
+  R('GET', '/projects/(\\d+)/insights', (m, o) => insights(+m[1], +o.query.days || 7));
+  R('GET', '/projects/(\\d+)/sightings', (m, o) => sightingsOf(+m[1], +o.query.days || 7, +o.query.limit || 200));
+  R('DELETE', '/projects/(\\d+)/insights', m => { const cams = S.cameras.filter(c => c.project_id === +m[1]).map(c => c.id);
+    S.sightings = (S.sightings || []).filter(r => r.project_id !== +m[1]); cams.forEach(id => { if (S.heat) delete S.heat[id]; }); save(); return { ok: true }; });
+  R('GET', '/cameras/(\\d+)/heatmap', (m, o) => {
+    const grid = new Array(HEAT_W * HEAT_H).fill(0), from = dayKey(since(+o.query.days || 7)), cam = (S.heat || {})[+m[1]] || {};
+    Object.keys(cam).forEach(k => { if (k >= from) cam[k].forEach((v, i) => grid[i] += v); });
+    return { w: HEAT_W, h: HEAT_H, grid, max: Math.max(0, ...grid) };
+  });
+  function csv(pid, days) {
+    const esc = v => /[",\n]/.test(String(v)) ? '"' + String(v).replace(/"/g, '""') + '"' : String(v);
+    const head = ['camera', 'label', 'track_id', 'first_seen', 'last_seen', 'duration_s', 'unaccompanied', 'seconds_alone', 'share_of_time_alone', 'largest_group', 'x_in_frame', 'y_in_frame', 'confidence'];
+    const lines = sightingsOf(pid, days, 100000).map(r => [r.camera_name, r.label, r.track_id, new Date(r.first_ts * 1000).toISOString(), new Date(r.last_ts * 1000).toISOString(), r.duration,
+      r.unaccompanied ? 'yes' : 'no', r.alone_seconds, r.alone_share, r.group_max, r.cx, r.cy, r.conf].map(esc).join(','));
+    return URL.createObjectURL(new Blob([[head.join(','), ...lines].join('\n')], { type: 'text/csv' }));
+  }
+
   async function call(method, path, o = {}) {
     const [p, qs] = path.split('?'); const query = Object.fromEntries(new URLSearchParams(qs || ''));
     for (const [mt, re, fn] of routes) { const m = re.exec(p); if (mt === method && m) return JSON.parse(JSON.stringify(await fn(m, { ...o, query }))); }
@@ -479,6 +629,8 @@
     call,
     rawFrame: id => (runners[id] && runners[id].raw) || 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540"><rect width="960" height="540" fill="#12181e"/><text x="480" y="276" fill="#b8c4cc" font-family="sans-serif" font-size="26" text-anchor="middle">Start the camera to draw a zone on a live frame</text></svg>'),
     alertImg: id => (find(S.alerts, id) || {}).snapshot || '',
+    still: id => (runners[id] && runners[id].raw) || stills[id] || 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360"><rect width="640" height="360" fill="#12181e"/><text x="320" y="186" fill="#b8c4cc" font-family="sans-serif" font-size="20" text-anchor="middle">Start the camera to see its picture</text></svg>'),
+    csv,
     reset: () => { localStorage.removeItem(KEY); location.reload(); }
   };
 })();

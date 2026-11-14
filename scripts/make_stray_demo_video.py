@@ -1,14 +1,17 @@
 """Make a short synthetic test clip for the stray dog analytic.
 
-It pastes real photos of a dog and a person onto a plain street-like background:
-  0-6 s   a dog walks with a person next to it (accompanied, should stay grey)
-  6-14 s  the person leaves and the dog keeps walking alone (unaccompanied, turns red)
-  9-16 s  a second dog walks in from the other side (two unaccompanied dogs)
+It pastes a photo of a dog and a person onto a plain street-like background:
+  0-7 s    a dog walks with a person next to it (accompanied, should stay grey)
+  7-9 s    the person walks off
+  9-24 s   the dog keeps walking alone (unaccompanied, turns red)
+  12-24 s  a second dog walks in from the other side and stops (two unaccompanied dogs)
 
-The photos are downloaded at run time from public repositories, so nothing is bundled here.
-This is only for checking the pipeline end to end. Use real camera footage for any pitch or evaluation.
+The dog is from darknet's data/dog.jpg (downloaded at run time). The person is cut from the
+Intel IoT DevKit retail sample in docs/samples (CC BY 4.0). This clip only checks the pipeline.
+Use real camera footage for any pitch or evaluation.
 
-    python scripts/make_stray_demo_video.py stray_demo.mp4
+    python scripts/make_stray_demo_video.py stray_demo.mp4            # 960x540
+    python scripts/make_stray_demo_video.py stray.mp4 640 360         # size used by the hosted demo
 """
 import sys
 import urllib.request
@@ -18,7 +21,7 @@ import cv2
 import numpy as np
 
 DOG_URL = "https://raw.githubusercontent.com/pjreddie/darknet/master/data/dog.jpg"
-PERSON_URL = "https://raw.githubusercontent.com/ultralytics/assets/main/im/bus.jpg"
+PERSON_CLIP = Path(__file__).resolve().parent.parent / "docs" / "samples" / "retail.mp4"
 CACHE = Path(__file__).resolve().parent.parent / "data" / "demo_assets"
 
 
@@ -59,30 +62,44 @@ def paste(frame, sprite, x, y, flip=False):
     frame[max(0, y0):y1, max(0, x0):x1] = s[ys0:ys0 + (y1 - max(0, y0)), xs0:xs0 + (x1 - max(0, x0))]
 
 
-def main(out="stray_demo.mp4", w=960, h=540, fps=15, seconds=16):
+def person_sprite():
+    cap = cv2.VideoCapture(str(PERSON_CLIP))
+    cap.set(cv2.CAP_PROP_POS_FRAMES, 210)
+    ok, frame = cap.read()
+    cap.release()
+    if not ok:
+        raise SystemExit(f"Could not read {PERSON_CLIP}")
+    return frame[84:311, 312:428]                        # a shopper in the CC BY 4.0 retail sample
+
+
+def main(out="stray_demo.mp4", w=960, h=540, fps=15, seconds=24):
+    w, h = int(w), int(h)
+    k = h / 540                                          # sprite sizes follow the frame height
     dog_img = fetch(DOG_URL, "dog.jpg")
-    person_img = fetch(PERSON_URL, "bus.jpg")
     dog = dog_img[219:542, 129:312]                      # the dog in darknet's dog.jpg
-    person = person_img[392:906, 50:243]                 # a person in Ultralytics' bus.jpg
-    dog = cv2.resize(dog, (int(dog.shape[1] * 220 / dog.shape[0]), 220))  # small models miss it below ~200 px
-    person = cv2.resize(person, (int(person.shape[1] * 260 / person.shape[0]), 260))
+    person = person_sprite()
+    dh, ph = int(220 * k), int(260 * k)                  # small models miss the dog below ~40% of frame height
+    dog = cv2.resize(dog, (int(dog.shape[1] * dh / dog.shape[0]), dh))
+    person = cv2.resize(person, (int(person.shape[1] * ph / person.shape[0]), ph))
     bg = background(w, h)
     vw = cv2.VideoWriter(out, cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
     for i in range(fps * seconds):
         t = i / fps
         f = bg.copy()
-        x1 = 40 + t * 45                                 # dog 1 walks right
+        x1 = 30 * k + t * 20 * k                         # dog 1 walks right, slowly
         paste(f, dog, x1, h * 0.92)
-        if t < 6:                                        # the person walks beside it
-            paste(f, person, x1 + 120, h * 0.92)
-        elif t < 8:                                      # then walks off to the top right
-            paste(f, person, x1 + 120 + (t - 6) * 260, h * 0.92)
-        if 9 <= t:                                       # dog 2 enters from the right
-            paste(f, dog, w - 200 - (t - 9) * 50, h * 0.80, flip=True)
+        if t < 7:                                        # the person walks beside it
+            paste(f, person, x1 + 120 * k, h * 0.92)
+        elif t < 9:                                      # then walks off to the right
+            paste(f, person, x1 + 120 * k + (t - 7) * 420 * k, h * 0.92)
+        if 12 <= t:                                      # dog 2 walks in from the right and stops, the dogs never overlap
+            paste(f, dog, w - min(t - 12, 3.0) * (w - 720 * k) / 3.0, h * 0.86)
+        cv2.putText(f, "Synthetic test clip", (int(10 * k) + 2, int(28 * k) + 2), cv2.FONT_HERSHEY_SIMPLEX, 0.8 * k, (0, 0, 0), 2, cv2.LINE_AA)
+        cv2.putText(f, "Synthetic test clip", (int(10 * k), int(28 * k)), cv2.FONT_HERSHEY_SIMPLEX, 0.8 * k, (255, 255, 255), 2, cv2.LINE_AA)
         vw.write(f)
     vw.release()
     print(f"Wrote {out}: {seconds}s at {fps} fps, {w}x{h}")
 
 
 if __name__ == "__main__":
-    main(*(sys.argv[1:2] or ["stray_demo.mp4"]))
+    main(*(sys.argv[1:4] or ["stray_demo.mp4"]))

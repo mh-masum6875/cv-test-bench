@@ -67,7 +67,9 @@ compare models on the same footage.
 
 ## Stray dog monitoring
 
-This branch adds what a council-style stray dog pilot needs on top of the test bench.
+This adds what a council-style stray dog pilot needs on top of the test bench. The hosted demo has a ready
+**Example: Stray dog monitoring** project (press **Start live demo** on the Projects page). It runs a synthetic
+test clip, labelled as such, so it shows how the system works, not how accurate it is on real cameras.
 
 **Quick start** (server running, see "Run it" above):
 
@@ -87,7 +89,7 @@ What is new:
 | "An object is alone" rule | Analytic editor, `condition: unaccompanied` | A dog counts only when no person is within N dog-heights (default 3). Red box = alone, grey = with a person |
 | Sightings log | `sightings` table | One row per tracked visit: first and last seen, time in view, time alone, largest group, position |
 | Hotspot heatmap | Insights tab, `GET /api/cameras/{id}/heatmap` | Where dogs stood (foot point) over the last day, week or month |
-| Trends | Insights tab, `GET /api/projects/{id}/insights` | Totals, by hour of day, by day, per camera |
+| Trends | Insights tab, `GET /api/projects/{id}/insights` | Totals, by hour of day, by day, per camera. In the hosted demo the same data is kept in your browser |
 | CSV export | `GET /api/projects/{id}/sightings.csv` | For council reports |
 | Privacy | "Blur people" option on the analytic | People are blurred in the live view, the stored stills and alert pictures |
 | Login | `APP_PASSWORD=... APP_USER=...` environment variables | HTTP Basic login on every page and API call. Use HTTPS or a VPN in front of it |

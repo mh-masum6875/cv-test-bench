@@ -201,7 +201,7 @@ function cameraForm(pid) {
     <div class="field"><label>Name</label><input id="f-name" placeholder="Gate camera"></div>
     <div id="src-sample" class="field ${type === 'sample' ? '' : 'hidden'}"><label>Sample clip</label><select id="f-sample">
       <option value="demo">Walking objects (simple test scene)</option><option value="safety">Warehouse floor with a marked zone</option><option value="traffic">Road seen from above</option>
-      <option value="retail">Shop aisle</option><option value="bottles">Bottles on a table</option><option value="people">People walking</option></select>
+      <option value="retail">Shop aisle</option><option value="stray">Street with stray dogs (synthetic test clip)</option><option value="bottles">Bottles on a table</option><option value="people">People walking</option></select>
       <div class="muted small" style="margin-top:6px">Clips from the Intel IoT DevKit sample videos, licensed CC BY 4.0.</div></div>
     <div id="src-file" class="field ${type === 'file' ? '' : 'hidden'}"><label>Video file (mp4, webm, avi, mkv...)</label><input type="file" id="f-file" accept="video/*"></div>
     <div id="src-url" class="field hidden"><label id="url-label">Stream URL</label><input id="f-url" placeholder="rtsp://user:password@192.168.1.20:554/stream1">
@@ -265,10 +265,6 @@ const hourLabel = h => h === null || h === undefined ? '-' : `${String(h).padSta
 
 async function renderInsights(pid, refresh = false) {
   const el = $('#tab'); if (!el) return;
-  if (MODE === 'demo') {
-    el.innerHTML = `<div class="empty"><h3>Insights need the server version</h3><p>Sightings, hotspot maps and trends are stored in the server's database.
-      Run the server (double-click <span class="mono">run.bat</span> on Windows) to see them.</p></div>`; return;
-  }
   const [ins, rows, cams] = await Promise.all([api(`/projects/${pid}/insights?days=${insightsDays}`), api(`/projects/${pid}/sightings?days=${insightsDays}&limit=100`), api(`/projects/${pid}/cameras`)]);
   if (!$('#tab')) return;
   const t = ins.totals;
@@ -276,7 +272,7 @@ async function renderInsights(pid, refresh = false) {
   const scroll = window.scrollY;
   el.innerHTML = `
     <div class="row" style="margin-bottom:14px;flex-wrap:wrap"><div class="seg">${ranges.map(([d, l]) => `<button data-act="ins-range" data-days="${d}" class="${insightsDays === d ? 'on' : ''}">${l}</button>`).join('')}</div>
-      <span class="grow"></span><a class="btn small" href="api/projects/${pid}/sightings.csv?days=${insightsDays}">Download CSV</a><button class="btn small danger" data-act="ins-clear">Clear data</button></div>
+      <span class="grow"></span><a class="btn small" ${MODE === 'demo' ? `href="${window.DemoBackend.csv(pid, insightsDays)}" download="sightings_project${pid}.csv"` : `href="api/projects/${pid}/sightings.csv?days=${insightsDays}"`}>Download CSV</a><button class="btn small danger" data-act="ins-clear">Clear data</button></div>
     <div class="stats">
       <div class="stat"><b>${t.sightings}</b><span>sightings (tracked visits)</span></div>
       <div class="stat"><b style="color:${t.unaccompanied ? 'var(--crit)' : 'inherit'}">${t.unaccompanied}</b><span>unaccompanied</span></div>
@@ -294,7 +290,7 @@ async function renderInsights(pid, refresh = false) {
     <div class="muted small" style="margin:-4px 0 12px">Brighter areas are where tracked objects spent the most time (their foot position), over the selected period.</div>
     <div class="grid heatgrid">${cams.map(c => {
       const s = ins.cameras.find(x => x.camera_id === c.id) || { sightings: 0, unaccompanied: 0, avg_dwell: 0, group_max: 0 };
-      return `<div class="card heatcard"><div class="heatwrap"><img src="api/cameras/${c.id}/still.jpg?t=${refresh ? Date.now() : 0}" alt="${esc(c.name)}"><canvas data-heat="${c.id}"></canvas></div>
+      return `<div class="card heatcard"><div class="heatwrap"><img src="${MODE === 'demo' ? window.DemoBackend.still(c.id) : `api/cameras/${c.id}/still.jpg?t=${refresh ? Date.now() : 0}`}" alt="${esc(c.name)}"><canvas data-heat="${c.id}"></canvas></div>
         <div class="row" style="margin-top:10px"><a href="#/c/${c.id}"><b>${esc(c.name)}</b></a><span class="grow"></span>${chip(c.runtime.status)}</div>
         <div class="kv"><span>Sightings <b>${s.sightings}</b></span><span>Unaccompanied <b>${s.unaccompanied}</b></span><span>Avg time <b>${fmtDur(s.avg_dwell)}</b></span><span>Largest group <b>${s.group_max}</b></span></div></div>`;
     }).join('') || '<div class="muted">No cameras in this project.</div>'}</div>
@@ -569,7 +565,7 @@ document.addEventListener('click', async e => {
     if (act === 'new-project') projectForm();
     else if (act === 'quick-demo') {
       const ps = await api('/projects'), withCams = ps.filter(p => p.cameras);
-      const p = withCams.find(p => /safety/i.test(p.name)) || withCams.find(p => /retail/i.test(p.name)) || withCams[0]; if (!p) return;
+      const p = withCams.find(p => /stray/i.test(p.name)) || withCams.find(p => /safety/i.test(p.name)) || withCams[0]; if (!p) return;
       const c = (await api(`/projects/${p.id}/cameras`))[0];
       await api(`/cameras/${c.id}/start`, { method: 'POST' }); location.hash = '#/c/' + c.id;
     }
