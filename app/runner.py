@@ -13,7 +13,7 @@ import numpy as np
 from . import db
 from .detectors import build_detector, inside
 from .rules import RuleState
-from .tracking import Tracker, is_alone
+from .tracking import Tracker, iou, is_alone
 
 COAST = 1.0                  # seconds a missed track keeps its box on screen
 ALONE = (60, 60, 235)        # BGR red for an unaccompanied target
@@ -290,7 +290,8 @@ class CameraRunner:
         # a tracked dog the detector missed for a moment keeps its last box for up to COAST seconds,
         # so boxes and counts do not blink when the score dips under the threshold for a frame or two
         live_ids = {t.id for t in live}
-        coast = [t for t in a.tracker.tracks if t.hits >= a.tracker.min_hits and t.id not in live_ids and ts - t.last_ts <= COAST]
+        coast = [t for t in a.tracker.tracks if t.hits >= a.tracker.min_hits and t.id not in live_ids and ts - t.last_ts <= COAST
+                 and not any(iou(t.box, l.box) > 0.3 for l in live)]      # a held box under a live one is the same dog
         a.coast = [{"label": t.label, "conf": t.conf, "box": t.box, "track_id": t.id, "confirmed": True, "alone": t.alone}
                    for t in coast]
         a.tracks_now = len(confirmed) + len(coast)

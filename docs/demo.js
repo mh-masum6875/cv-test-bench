@@ -36,9 +36,10 @@
      They use open YOLO models and CC BY 4.0 sample footage, so they show the idea, not my client models. */
   const STRAY = { name: 'Example: Stray dog monitoring', camera: 'Residential street (AI-generated footage)',
     camera2: 'Street from a higher pole (AI-generated footage)',
-    description: 'Flags a dog only when no person is near it (a pet on a leash shows in blue, a stray alone turns red), tracks each dog with an ID, blurs faces, '
-      + 'and builds hotspots and trends on the Insights tab. The footage is AI-generated sample video of a Shah Alam street, so it shows how the system works, '
-      + 'not how accurate it is on real cameras. The detector here is a small general model; a pilot would use one trained on local footage.' };
+    description: 'Flags a dog only when no person is near it (a dog with a person nearby shows in blue, a dog alone turns red), tracks each dog with an ID, '
+      + 'blurs the faces of the people it detects, and builds hotspots and trends on the Insights tab. Both clips are AI-generated videos of residential streets, '
+      + 'made for this demo, so they show how the system works, not how accurate it is on real cameras. The detector here is a small general model that can '
+      + 'miss dogs that are lying down or far away; a pilot would use one trained on local footage.' };
   const STRAY_ANALYTIC = { name: 'Unaccompanied dog', model_id: 3, conf: 0.2, classes: ['dog'],
     rule: { condition: 'unaccompanied', min_seconds: 2, cooldown_seconds: 15, severity: 'warning', companions: ['person'], companion_radius: 3, blur_people: true } };
   function addStrayCamera2(p) {                                 // a second camera in the stray example
@@ -58,17 +59,18 @@
       S.projects.forEach(p => { p.description = (p.description || '').replace(' The detector is YOLOv8n from Ultralytics.', '').replace('a dedicated PPE model', 'a dedicated safety-gear model'); });
       const p = S.projects.find(x => x.name === STRAY.name);
       if (p) { p.description = STRAY.description; const c = S.cameras.find(x => x.project_id === p.id); if (c) c.name = STRAY.camera; }
-      lowerStrayConf(); S.presets = 7; save(); return;
+      lowerStrayConf(); S.presets = 8; save(); return;
     }
     if (S.presets === 4) {                                       // remove model names from the older example texts
       S.projects.forEach(p => { p.description = (p.description || '').replace(' The detector is YOLOv8n from Ultralytics.', '').replace('a dedicated PPE model', 'a dedicated safety-gear model'); });
-      lowerStrayConf(); S.presets = 7; save(); return;
+      lowerStrayConf(); S.presets = 8; save(); return;
     }
     if (S.presets === 5) {                                       // stray example: lower threshold, fewer blinking boxes
-      lowerStrayConf(); S.presets = 7; save(); return;
+      lowerStrayConf(); S.presets = 8; save(); return;
     }
-    if (S.presets === 6) { lowerStrayConf(); S.presets = 7; save(); return; }
-    if (S.presets === 7) return;
+    if (S.presets === 6) { lowerStrayConf(); S.presets = 8; save(); return; }
+    if (S.presets === 7) { lowerStrayConf(); S.presets = 8; save(); return; }   // refresh the stray example text
+    if (S.presets === 8) return;
     const t = Date.now() / 1000, rule = (o) => ({ ...DEFAULT_RULE, ...o });
     const mk = (name, description, camName, sample, an) => {
       const p = { id: nid('p'), name, description, created_at: t }; S.projects.push(p);
@@ -78,7 +80,7 @@
     if (S.presets === 2) {
       addStray(mk);
       S.projects.forEach(p => { p.description = (p.description || '').replace(' The detector is YOLOv8n from Ultralytics.', '').replace('a dedicated PPE model', 'a dedicated safety-gear model'); });
-      S.presets = 7; save(); return;
+      S.presets = 8; save(); return;
     }
     mk('Example: Workplace safety', 'Raise an alert when a person walks into a marked floor zone. Press Start on the camera. Checking hard hats needs a dedicated safety-gear model, which the server version can load.',
       'Warehouse floor', 'safety', [{ name: 'Person in the marked zone', model_id: 3, conf: 0.35, classes: ['person'], roi: [[0.06, 0.34], [0.58, 0.2], [0.93, 0.58], [0.5, 0.98], [0.02, 0.8]], rule: { min_seconds: 1, cooldown_seconds: 8, severity: 'critical' } }]);
@@ -89,7 +91,7 @@
     mk('Example: Sorting and counting', 'Count items on a table. This one counts bottles, the same idea as counting recyclables or products on a line.',
       'Table', 'bottles', [{ name: 'Two or more bottles', model_id: 3, conf: 0.3, classes: ['bottle'], rule: { count: 2, min_seconds: 1, cooldown_seconds: 10, severity: 'info' } }]);
     addStray(mk);
-    S.presets = 7; save();
+    S.presets = 8; save();
   }
   function addStray(mk) {
     mk(STRAY.name, STRAY.description, STRAY.camera, 'stray', [{ ...STRAY_ANALYTIC, classes: [...STRAY_ANALYTIC.classes], rule: { ...STRAY_ANALYTIC.rule } }]);
@@ -436,7 +438,8 @@
       dets.forEach(d => { const t = byId.get(d.track_id); d.confirmed = !!t; d.alone = !!(t && t.alone); });
       // a tracked dog missed for a moment keeps its last box for up to a second, so boxes and counts do not blink
       const liveIds = new Set(live.map(t => t.id));
-      const coast = a.tracker.tracks.filter(t => t.hits >= a.tracker.minHits && !liveIds.has(t.id) && ts - t.last <= 1.0);
+      const coast = a.tracker.tracks.filter(t => t.hits >= a.tracker.minHits && !liveIds.has(t.id) && ts - t.last <= 1.0
+        && !live.some(l => iou(t.box, l.box) > 0.3));                // a held box under a live one is the same dog
       a.coast = coast.map(t => ({ label: t.label, conf: t.conf, box: t.box, track_id: t.id, confirmed: true, alone: t.alone }));
       a.tracks_now = conf.length + coast.length; a.alone_now = alone + coast.filter(t => t.alone).length;
       this.endTracks(a, ended);

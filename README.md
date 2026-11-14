@@ -85,7 +85,7 @@ What is new:
 
 | Feature | Where | Notes |
 | --- | --- | --- |
-| Tracking with IDs | `app/tracking.py` | IoU matching with a centre-distance fallback, no extra packages. Gives unique counts and time in view per dog |
+| Tracking with IDs | `app/tracking.py` | IoU matching with a centre-distance fallback, no extra packages. Gives a count of tracked visits and time in view per dog. A dog hidden for more than a few seconds comes back with a new ID |
 | "An object is alone" rule | Analytic editor, `condition: unaccompanied` | A dog counts only when no person is within N dog-heights (default 3). Red box = alone, blue = with a person |
 | Sightings log | `sightings` table | One row per tracked visit: first and last seen, time in view, time alone, largest group, position |
 | Hotspot heatmap | Insights tab, `GET /api/cameras/{id}/heatmap` | Where dogs stood (foot point) over the last day, week or month |

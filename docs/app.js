@@ -279,6 +279,7 @@ async function renderInsights(pid, refresh = false) {
       <div class="stat"><b>${fmtDur(t.avg_dwell)}</b><span>average time in view</span></div>
       <div class="stat"><b>${t.group_max}</b><span>largest group seen together</span></div>
       <div class="stat"><b>${hourLabel(t.busiest_hour)}</b><span>busiest hour</span></div></div>
+    ${MODE === 'demo' ? `<div class="muted small" style="margin:-8px 0 14px">This data is kept in your browser only. The sample videos loop, so every loop adds new sightings.</div>` : ''}
     ${t.sightings ? '' : `<div class="card muted small" style="margin-bottom:16px">No sightings in this period yet. A sighting is saved when a tracked object leaves the view or the camera stops.
       Add an analytic with the rule <b>an object is alone</b> and the class <b>dog</b>, then start the camera.</div>`}
     <div class="two">
@@ -402,9 +403,9 @@ function analyticCard(a, rt) {
     <div class="row"><button class="btn small" data-act="edit-an" data-id="${a.id}">Edit</button><button class="btn small danger" data-act="del-an" data-id="${a.id}">Delete</button></div></div>
     <div class="kv">${a.classes.length ? `<span>Classes <b>${esc(a.classes.join(', '))}</b></span>` : '<span>All classes</span>'}${a.roi.length >= 3 ? '<span>Zone <b>on</b></span>' : '<span>Whole frame</span>'}${a.webhook_url ? '<span>Webhook <b>on</b></span>' : ''}</div>
     <div class="kv">${ruleText(a.rule)}${a.rule.blur_people ? '<span>Faces <b>blurred</b></span>' : ''}</div>
-    ${rt ? (rt.error ? `<div style="color:var(--crit)" class="small">Model error: ${esc(rt.error)}</div>` : `<div class="row small"><span>Now: <b style="font-size:1.1rem">${rt.count}</b> object${rt.count === 1 ? '' : 's'}</span>
+    ${rt ? (rt.error ? `<div style="color:var(--crit)" class="small">Model error: ${esc(rt.error)}</div>` : `<div class="row small"><span>${a.rule.condition === 'unaccompanied' ? `In view now: <b style="font-size:1.1rem">${rt.tracks_now ?? 0}</b>` : `Now: <b style="font-size:1.1rem">${rt.count}</b> object${rt.count === 1 ? '' : 's'}`}</span>
       <span class="muted">${rt.infer_ms} ms / frame</span><span class="muted">${Object.entries(rt.labels).map(([k, v]) => k + ' ' + v).join(', ')}</span></div>
-      ${rt.tracks_now !== undefined ? `<div class="row small"><span>Tracked now <b>${rt.tracks_now}</b></span>${a.rule.condition === 'unaccompanied' ? `<span>Unaccompanied <b style="color:${rt.alone_now ? 'var(--crit)' : 'inherit'}">${rt.alone_now}</b></span>` : ''}<span class="muted">Unique since start <b>${rt.unique}</b></span></div>` : ''}
+      ${rt.tracks_now !== undefined ? `<div class="row small">${a.rule.condition === 'unaccompanied' ? '' : `<span>Tracked now <b>${rt.tracks_now}</b></span>`}${a.rule.condition === 'unaccompanied' ? `<span>Unaccompanied <b style="color:${rt.alone_now ? 'var(--crit)' : 'inherit'}">${rt.alone_now}</b></span>` : ''}<span class="muted" title="A dog that is hidden for a few seconds can come back with a new ID, so this can be higher than the number of different dogs">Tracked IDs since start <b>${rt.unique}</b></span></div>` : ''}
       <canvas class="spark" id="sp${a.id}" width="600" height="112"></canvas>`) : '<div class="muted small">Start the camera to see live numbers.</div>'}</div>`;
 }
 function spark(cv, hist) {
@@ -457,7 +458,7 @@ async function analyticForm(cid, a) {
       <div class="two"><div class="field"><label>Companion classes (comma separated)</label><input id="r-comp" value="${esc((r.companions || ['person']).join(', '))}"></div>
       <div class="field"><label>Near means within this many dog-heights</label><input id="r-rad" type="number" min="0.5" max="20" step="0.5" value="${r.companion_radius ?? 3}"></div></div>
     </div>
-    <label style="display:flex;gap:8px;align-items:center;color:var(--ink);margin:-4px 0 14px"><input type="checkbox" id="r-blur" ${r.blur_people ? 'checked' : ''}> Blur faces in the live view and alert pictures (privacy)</label>
+    <label style="display:flex;gap:8px;align-items:center;color:var(--ink);margin:-4px 0 14px"><input type="checkbox" id="r-blur" ${r.blur_people ? 'checked' : ''}> Blur the faces of detected people in the live view and alert pictures (privacy)</label>
     <div class="two"><div class="field"><label>Must hold for (seconds)</label><input id="r-min" type="number" min="0" value="${r.min_seconds}"></div>
     <div class="field"><label>Wait between alerts (seconds)</label><input id="r-cool" type="number" min="0" value="${r.cooldown_seconds}"></div></div>
     <div class="field"><label>Active on</label><div class="days">${DAYS.map((d, i) => `<label><input type="checkbox" class="r-day" value="${i}" ${r.days.includes(i) ? 'checked' : ''}>${d}</label>`).join('')}</div></div>
