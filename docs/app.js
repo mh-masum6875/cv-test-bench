@@ -517,31 +517,32 @@ async function analyticForm(cid, a) {
 
 /* ---------------------------------------------------------- work with me */
 const OFFERS = [
-  ['YOLO fine-tune plus TensorRT export', '5 working days', 'A labelled dataset and the GPU or device you plan to run on.',
-    'Trained weights, ONNX and TensorRT files, an accuracy report on your validation split, measured latency, and a script that reproduces both.'],
-  ['Latency and accuracy audit', '3 working days', 'Access to your detection pipeline, or a recording of it running, and a validation set.',
-    'A written report on where the time goes at each stage, accuracy on your data, and a ranked list of fixes with the expected gain of each.'],
-  ['Dataset and evaluation check', '2 working days', 'Your annotations and the script that produces your accuracy number.',
-    'A report on label problems, format conversion errors and metric mistakes, with a fix for each.']
+  ['YOLO fine-tune and TensorRT export', 'About 5 working days',
+    'A detector trained for your objects and exported to run fast on your GPU or edge device. You get the weights, the ONNX and TensorRT files, an accuracy report and measured latency.'],
+  ['Latency and accuracy audit', 'About 3 working days',
+    'I go through your detection pipeline and find where the time and the accuracy are lost. You get a written report with a ranked list of fixes.'],
+  ['Dataset and evaluation check', 'About 2 working days',
+    'I check your labels, format conversions and metric code for the errors that make accuracy numbers wrong. You get a report with a fix for each one.'],
+  ['Custom model or full pipeline', 'Scoped after a call',
+    'Need a custom model, data labelling, or a full camera pipeline with alerts? Tell me the problem and I will come back with a scope and a timeline. For larger jobs I can put together and manage a small team.']
 ];
 function pageWork() {
-  view.innerHTML = `<div class="top"><div><h1>Work with me</h1><p>Fixed-scope computer vision projects for small teams and agencies.</p></div>
-    <a class="btn primary" href="mailto:mhmasum6875@gmail.com">Email me</a></div>
+  view.innerHTML = `<div class="top"><div><h1>Work with me</h1><p>Computer vision projects for small teams and agencies.</p></div>
+    <a class="btn primary" href="mailto:mhmasum6875@gmail.com">Get in touch</a></div>
     <p class="worklede">I'm Maidul Hasan Masum. I built this test bench, and I train, measure and deploy detection models.
-      Each project below has a set list of deliverables and a set timeline, agreed before work starts. Prices are on request.</p>
-    <div class="grid">${OFFERS.map(([t, days, send, get]) => `<div class="card offer"><h3>${t}</h3><div class="days">${days}</div>
-      <p><b>You send:</b> ${send}</p><p><b>You get:</b> ${get}</p></div>`).join('')}</div>
+      These are the jobs I take most often. Prices are on request.</p>
+    <div class="grid">${OFFERS.map(([t, days, text]) => `<div class="card offer"><h3>${t}</h3><div class="days">${days}</div><p>${text}</p></div>`).join('')}</div>
     <h2 style="margin:26px 0 10px">How I work</h2>
     <ul class="worklist">
-      <li>Every speed or accuracy figure I give you comes from a run you can repeat, with the hardware, software versions and input size written next to it.</li>
-      <li>If I measure on my own machine it is an RTX 3050 laptop GPU with 4 GB of memory, and the report says so. For numbers on your hardware, I run the same script there.</li>
+      <li>It starts with an email or a short call about the problem. I send back a fixed scope, timeline and price before any work begins.</li>
+      <li>Every speed or accuracy figure comes from a run you can repeat on your own hardware.</li>
       <li>You own the code, the weights and the report.</li>
       <li>I work in English from Kuala Lumpur (UTC+8), with a few hours of overlap with Europe and Australia each day.</li>
     </ul>
-    <h2 style="margin:26px 0 10px">Try before you write</h2>
-    <p class="worklede">You can check how I build things without talking to me. <a href="#/">Run a detector on your webcam or add your own model</a> on this site,
+    <h2 style="margin:26px 0 10px">See my work first</h2>
+    <p class="worklede">You can check how I build things before you write. <a href="#/">Run a detector on your webcam or add your own model</a> on this site,
       read the <a href="${REPO}" target="_blank" rel="noopener">source code</a>, or see my <a href="https://mh-masum6875.github.io" target="_blank" rel="noopener">background and publications</a>.</p>
-    <p class="worklede">To start, email <a href="mailto:mhmasum6875@gmail.com">mhmasum6875@gmail.com</a> with your model, your target hardware and the problem.</p>`;
+    <p class="worklede">To start, email <a href="mailto:mhmasum6875@gmail.com">mhmasum6875@gmail.com</a> and tell me what you are trying to do.</p>`;
   refreshSide();
 }
 
