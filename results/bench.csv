@@ -1,0 +1,16 @@
+clip,frame_size,frames,model,mean_ms,median_ms,p95_ms,fps,boxes_per_frame
+people,640x360,360,Motion detector,2.22,2.17,2.94,450.3,0.76
+people,640x360,360,"YOLOv8n COCO, ONNX 416",26.14,26.11,28.84,38.3,0.6
+people,640x360,360,"YOLOv8n Open Images V7, ONNX 416",35.82,35.89,38.11,27.9,0.16
+retail,640x360,360,Motion detector,2.72,2.82,3.63,367.9,2.46
+retail,640x360,360,"YOLOv8n COCO, ONNX 416",32.66,28.47,57.26,30.6,2.52
+retail,640x360,360,"YOLOv8n Open Images V7, ONNX 416",37.06,36.9,40.22,27.0,1.14
+traffic,640x360,360,Motion detector,2.54,2.43,3.45,394.1,1.06
+traffic,640x360,360,"YOLOv8n COCO, ONNX 416",31.35,27.53,60.86,31.9,0.35
+traffic,640x360,360,"YOLOv8n Open Images V7, ONNX 416",35.95,36.12,40.65,27.8,0.19
+safety,640x360,360,Motion detector,2.78,2.76,3.57,359.8,0.91
+safety,640x360,360,"YOLOv8n COCO, ONNX 416",25.53,25.96,28.34,39.2,0.77
+safety,640x360,360,"YOLOv8n Open Images V7, ONNX 416",39.43,36.33,65.91,25.4,0.22
+bottles,640x360,360,Motion detector,2.53,2.49,3.29,395.8,1.51
+bottles,640x360,360,"YOLOv8n COCO, ONNX 416",32.08,29.48,47.19,31.2,2.62
+bottles,640x360,360,"YOLOv8n Open Images V7, ONNX 416",40.94,38.73,55.26,24.4,2.18

@@ -1,58 +1,78 @@
 # CV Test Bench
 
-A small dashboard for testing computer vision models on live RTSP streams and recorded video.
+A web dashboard for testing object detection models on live cameras and recorded video. Point it at an
+RTSP stream, a video file or a webcam, pick a model, draw a zone, set an alert rule, and watch what the
+model does frame by frame.
 
-Part of the portfolio of [Maidul Hasan Masum](https://mh-masum6875.github.io).
+**Try it in your browser, nothing to install: https://mh-masum6875.github.io/cv-test-bench/**
 
-**Try it in your browser (no install): https://mh-masum6875.github.io/cv-test-bench/**
-The hosted version runs entirely in your browser, with sample footage, your own video files, your
-webcam or an HLS link, and two built-in detectors (motion and COCO-SSD). Nothing is uploaded.
-You can add **your own YOLO model** (exported to ONNX) on the Models page. It runs in your browser and stays on your computer.
-For **RTSP streams** and `.pt` weights, run the server version below. It is the same interface.
+![People detected inside a zone on the store sample clip](docs/img/demo.gif)
 
-Create a **project**, add **cameras** (an RTSP URL or an uploaded video), attach one or more
-**analytics** to each camera (a model, a confidence threshold, an optional detection zone and an
-alert rule), and watch the annotated feed live. Alerts are saved with a snapshot and can also be
-sent to a webhook.
+The clip above is the server version running the bundled YOLOv8n model on the store sample, with a zone
+drawn over the aisle. This is the dashboard around it:
+
+![The camera page with the live view, the analytic card and an alert](docs/img/dashboard.jpg)
+
+## What it does
+
+* Projects, cameras and analytics. One camera can run several models side by side.
+* Sources: RTSP streams and uploaded video on the server. The browser version adds your webcam and HLS links.
+* Models: a built-in motion detector, any YOLO detection model exported to ONNX, and `.pt` or `.engine`
+  weights through Ultralytics. Each analytic card shows objects now, milliseconds per frame and a
+  one-minute chart, so two models can be compared on the same footage.
+* Zones, tracking with IDs, and alert rules with dwell time, cooldown and a schedule. Alerts are saved
+  with a snapshot and can be sent to a webhook.
+* The hosted site runs the same interface fully in the browser. Nothing is uploaded, and a model you
+  add there stays on your computer.
 
 ## Run it
 
-**Windows:** install Python 3.10 or newer, then double-click `run.bat`. The first start installs the packages and opens the browser.
+**Windows:** install Python 3.10 or newer, then
+
+```
+run.bat
+```
+
+The first start creates a virtual environment, installs the packages and opens http://127.0.0.1:8000.
 
 **Mac or Linux:**
 
 ```bash
 python -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt
-pip install ultralytics            # only if you want to run your own YOLO weights
 ./scripts/dev.sh                   # then open http://127.0.0.1:8000
 ```
 
-Or with Docker: `docker build -t cv-test-bench . && docker run -p 8000:8000 -v $PWD/data:/app/data cv-test-bench`
+Add `pip install ultralytics` if you want to load `.pt` or `.engine` weights. ONNX models need nothing extra.
 
-The app listens on `127.0.0.1` by default. Set `HOST=0.0.0.0` to reach it from other machines,
-and put it behind a login or VPN first, because it has no user accounts.
+**Docker:** `docker build -t cv-test-bench . && docker run -p 8000:8000 -v $PWD/data:/app/data cv-test-bench`
 
-## What is in the hosted site
+The app listens on `127.0.0.1` by default. Set `HOST=0.0.0.0` to reach it from other machines. Set
+`APP_USER` and `APP_PASSWORD` to put a login on it, and use HTTPS or a VPN in front.
 
-* **Test Bench** (`/`): projects, cameras, analytics, zones, alert rules. Four **Example** projects mirror areas from my
-  applied computer vision work (workplace safety, traffic, retail, counting) using open YOLO models.
-* **Your own model**: Models, Add model, choose an `.onnx` export (YOLOv5u, YOLOv8 or YOLO11 detection). It is stored in your browser only.
-* **CV Lab** (`/lab/`): eight tasks on a sample picture, your own file or your webcam: object detection, classification,
-  face detection, face landmarks, hand tracking, gestures, pose estimation and segmentation.
-* Credits and licences for the open models and sample footage are in [NOTICE.md](NOTICE.md).
+## Results
 
-## Try it without a camera
+Speed of the bundled detectors on the five bundled sample clips (640x360, 360 frames each, 1800 frames
+per model). The time is for one `detect()` call: resize, inference and box filtering. Video decoding and
+drawing are not included.
 
-```bash
-python scripts/make_demo_video.py demo.mp4
-```
+| Model | Input | Mean | Median | 95th percentile | Frames per second |
+| --- | --- | --- | --- | --- | --- |
+| Motion detector (background subtraction) | 480 px wide | 2.6 ms | 2.5 ms | 3.4 ms | 391 |
+| YOLOv8n COCO, ONNX | 416x416 | 29.6 ms | 27.4 ms | 45.1 ms | 33.8 |
+| YOLOv8n Open Images V7, ONNX | 416x416 | 37.8 ms | 36.8 ms | 44.9 ms | 26.4 |
 
-A ready-made copy is in `samples/demo.mp4`.
+Measured on 15 November 2026 on an AMD Ryzen 5 4600H laptop CPU (6 cores), no GPU, with Windows 11,
+Python 3.13.12, ONNX Runtime 1.32.0 (CPU provider) and OpenCV 5.0.0. Frames per second is 1000 divided
+by the mean time.
 
-Make a project, choose **Add camera, Upload a video**, pick `demo.mp4`, add an analytic that uses
-the built-in **Motion detector**, and press Start. Objects walk through the scene, so alerts fire
-within seconds.
+In the running server on the same machine, the store clip played at 13 frames per second and every frame
+was processed by YOLOv8n COCO at about 25 to 30 ms each.
+
+To repeat it: `python scripts/bench.py`. The per-clip numbers, the time of every frame and the software
+versions are in [results/](results).
+
+These are speed figures only. There is no accuracy figure here, because the sample clips have no labels.
 
 ## Test your own model
 
@@ -64,53 +84,6 @@ within seconds.
 
 Each analytic card shows objects now, milliseconds per frame, and a one-minute chart, so you can
 compare models on the same footage.
-
-## Stray dog monitoring
-
-This adds what a council-style stray dog pilot needs on top of the test bench. The hosted demo has a ready
-**Example: Stray dog monitoring** project (press **Start live demo** on the Projects page). Its two cameras play AI-generated
-sample footage of residential streets, labelled as such, so it shows how the system works, not how accurate it is on real cameras.
-
-**Quick start** (server running, see "Run it" above):
-
-```bash
-python scripts/setup_stray_demo.py                    # synthetic test clip and the bundled YOLOv8n ONNX model
-python scripts/setup_stray_demo.py --video street.mp4 # your own footage
-python scripts/setup_stray_demo.py --rtsp rtsp://user:pass@192.168.1.20:554/stream1
-```
-
-It creates a project, a camera and an **Unaccompanied dog** analytic, starts it, and prints the links.
-
-What is new:
-
-| Feature | Where | Notes |
-| --- | --- | --- |
-| Tracking with IDs | `app/tracking.py` | IoU matching with a centre-distance fallback, no extra packages. Gives a count of tracked visits and time in view per dog. A dog hidden for more than a few seconds comes back with a new ID |
-| "An object is alone" rule | Analytic editor, `condition: unaccompanied` | A dog counts only when no person is within N dog-heights (default 3). Red box = alone, blue = with a person |
-| Sightings log | `sightings` table | One row per tracked visit: first and last seen, time in view, time alone, largest group, position |
-| Hotspot heatmap | Insights tab, `GET /api/cameras/{id}/heatmap` | Where dogs stood (foot point) over the last day, week or month |
-| Trends | Insights tab, `GET /api/projects/{id}/insights` | Totals, by hour of day, by day, per camera. In the hosted demo the same data is kept in your browser |
-| CSV export | `GET /api/projects/{id}/sightings.csv` | For council reports |
-| Privacy | "Blur faces" option on the analytic | The head area of each detected person is blurred in the live view, the stored stills and alert pictures. People stay visible otherwise |
-| Login | `APP_PASSWORD=... APP_USER=...` environment variables | HTTP Basic login on every page and API call. Use HTTPS or a VPN in front of it |
-| ONNX models without PyTorch | `app/detectors.py`, `OnnxDetector` | `.onnx` exports of YOLOv5u/v8/11 and end-to-end exports (YOLO26) run with ONNX Runtime |
-| RF-DETR | Register a model with path `rfdetr:medium` (or `rfdetr:medium:/path/best.pth`) | Apache 2.0, safe for a commercial product. Needs `pip install rfdetr`. Written against the rfdetr package API but **not yet tested** in this branch |
-
-How a sighting is classed as **unaccompanied**: the dog was alone for at least the rule's
-"must hold for" time, or for most of the time it was in view. Sightings are written when a track
-ends (the dog leaves the view for more than 3 seconds) or when the camera stops.
-
-Honest limits, worth saying in any pitch:
-
-* A camera cannot see ownership. "Unaccompanied" means no person near the dog, which is what the
-  San Antonio roaming dog study also used. A loose pet dog will count too.
-* The bundled `yolov8n` model is small and sometimes calls a dog a cat at a distance. For a pilot,
-  fine-tune a detector on local day and night footage at the council's camera heights.
-* Night performance depends on the camera. Report day and night accuracy separately.
-* The bundled YOLOv8 weights are AGPL-3.0. Use RF-DETR (Apache 2.0) or an Ultralytics licence for a commercial product.
-* The synthetic clip from `scripts/make_stray_demo_video.py` only checks the pipeline. Do not use it as evidence of accuracy.
-
-Tests: `python -m pytest tests/test_tracking.py tests/test_rules.py`
 
 ## Alert rules
 
@@ -132,6 +105,12 @@ Tests: `python -m pytest tests/test_tracking.py tests/test_rules.py`
 * If the stream drops, the camera shows `error` and reconnects by itself.
 * Passwords in the URL are hidden in the tables.
 
+## Stray dog monitoring
+
+One of the example projects counts dogs that are on a street with no person near them. It uses the
+tracker, an "an object is alone" rule, a sightings log, a heatmap and a CSV export. The details and
+its limits are in [docs/STRAY_DOGS.md](docs/STRAY_DOGS.md).
+
 ## Where things are
 
 ```
@@ -144,7 +123,9 @@ app/db.py          SQLite tables
 docs/              the web interface (plain JavaScript, no build step). Also what GitHub Pages serves
 docs/demo.js       the in-browser backend used when no server is running
 docs/vendor/       TensorFlow.js, COCO-SSD and hls.js, bundled so the site needs no CDN
-docs/models/       the COCO-SSD weights used by the browser demo
+docs/models/       the COCO-SSD and YOLOv8n weights used by the browser demo
+scripts/bench.py   the timing script behind the results table
+results/           its raw output
 data/              database, uploaded videos and models, alert snapshots
 ```
 
@@ -153,13 +134,29 @@ To use a model that is not Ultralytics, subclass `Detector` in `app/detectors.py
 
 ## Check that it works
 
-With the server running: `python tests/test_api.py http://127.0.0.1:8000 demo.mp4`
+```bash
+pip install pytest requests
+python -m pytest tests/test_tracking.py tests/test_rules.py
+python tests/test_api.py http://127.0.0.1:8000 samples/demo.mp4     # with the server running
+```
 
-## Publish the browser demo on GitHub Pages
+## Known limits
 
-1. Create a public repository, for example `cv-test-bench`, and push this folder to it.
-2. In the repository open **Settings, Pages**, choose **Deploy from a branch**, branch `main`, folder `/docs`.
-3. The site appears at `https://<your-user>.github.io/cv-test-bench/` after a minute.
+* The bundled models are YOLOv8n, the smallest size, at 416 pixels. They are there so the demo loads
+  fast. Small or distant objects are missed. Bring your own model for real use.
+* The browser version runs on the CPU through WebAssembly and is slower than the server. It cannot open
+  RTSP streams.
+* There are no user accounts. The only protection is one shared login set with `APP_USER` and `APP_PASSWORD`.
+* One process and SQLite. It is a test tool for a handful of cameras, not a video management system.
+* The tracker is simple IoU matching. An object hidden for a few seconds comes back with a new ID.
+* I tested the server on Windows 11 with Python 3.13. The Mac, Linux and Docker commands are not covered by that test.
+* RF-DETR support is written against the rfdetr package but has not been run.
 
-The page detects whether a Python server is behind it. On GitHub Pages there is none, so it switches to
-the in-browser backend automatically.
+## Licence
+
+My code is MIT, see [LICENSE](LICENSE). The bundled YOLOv8n weights are AGPL-3.0 from Ultralytics, so
+swap them for your own model in a commercial product. Credits for the models and sample footage are in
+[NOTICE.md](NOTICE.md).
+
+Built by [Maidul Hasan Masum](https://mh-masum6875.github.io). If you need a model trained, made faster
+or checked on your own cameras, see [Work with me](https://mh-masum6875.github.io/cv-test-bench/#/work).

@@ -1,0 +1,8 @@
+date: 2026-11-15
+cpu: AMD Ryzen 5 4600H, 6 cores, 12 threads (laptop). No GPU used
+os: Windows-11-10.0.26300-SP0
+python: 3.13.12
+onnxruntime: 1.32.0 (AzureExecutionProvider, CPUExecutionProvider)
+opencv: 5.0.0
+numpy: 2.5.4
+confidence threshold: 0.4, warm-up frames: 20
