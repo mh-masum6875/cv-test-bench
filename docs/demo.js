@@ -16,13 +16,31 @@
   ];
   const FILES = {};            // uploaded videos live in memory only
   const runners = {};
+  /* Card texts for the ready-made projects. */
+  const TEXT = {
+    'Welcome project': 'Add your own video, webcam or stream and compare detectors on it.',
+    'Stray dog monitoring': 'Flags a dog with no person near it and maps where dogs are seen. The clips are AI-generated.',
+    'Workplace safety': 'Alerts when a person walks into a marked floor zone.',
+    'Traffic': 'Warns when two or more vehicles are on the road.',
+    'Retail': 'Alerts when a customer stays in an aisle.',
+    'Sorting and counting': 'Counts bottles on a table.',
+  };
   let S = load();
   if (!S.models) S.models = [];
   const allModels = () => MODELS.concat(S.models);
 
+  function tidyText() {                                         // earlier visitors: shorter names and card texts, once
+    if (S.tidy === 1) return;
+    (S.projects || []).forEach(p => {
+      const name = (p.name || '').replace(/^Example: /, '');
+      if (TEXT[name]) { p.name = name; p.description = TEXT[name]; }
+    });
+    S.tidy = 1; save();
+  }
+
   /* ---------- storage ---------- */
   function seed() {
-    const s = { v: 1, nid: { p: 2, c: 2, a: 3, al: 1 }, projects: [{ id: 1, name: 'Welcome project', description: 'A sample project. Add your own video, webcam or HLS stream and compare detectors on it.', created_at: Date.now() / 1000 }],
+    const s = { v: 1, nid: { p: 2, c: 2, a: 3, al: 1 }, projects: [{ id: 1, name: 'Welcome project', description: TEXT['Welcome project'], created_at: Date.now() / 1000 }],
       cameras: [{ id: 1, project_id: 1, name: 'Sample footage', source_type: 'sample', source: 'samples/demo', enabled: 1, fps_limit: 8, created_at: Date.now() / 1000 }],
       analytics: [
         { id: 1, camera_id: 1, name: 'Movement in the left area', model_id: 1, conf: 0.4, classes: [], roi: [[0.04, 0.12], [0.62, 0.12], [0.62, 0.95], [0.04, 0.95]], enabled: 1, webhook_url: '', created_at: Date.now() / 1000,
@@ -32,14 +50,9 @@
       alerts: [] };
     return s;
   }
-  /* Ready-made examples that mirror the areas in my applied computer vision repositories.
-     They use open YOLO models and CC BY 4.0 sample footage, so they show the idea, not my client models. */
-  const STRAY = { name: 'Example: Stray dog monitoring', camera: 'Residential street (AI-generated footage)',
-    camera2: 'Street from a higher pole (AI-generated footage)',
-    description: 'Flags a dog only when no person is near it (a dog with a person nearby shows in blue, a dog alone turns red), tracks each dog with an ID, '
-      + 'blurs the faces of the people it detects, and builds hotspots and trends on the Insights tab. Both clips are AI-generated videos of residential streets, '
-      + 'made for this demo, so they show how the system works, not how accurate it is on real cameras. The detector here is a small general model that can '
-      + 'miss dogs that are lying down or far away; a pilot would use one trained on local footage.' };
+  /* Ready-made projects on open YOLO models and sample footage. */
+  const STRAY = { name: 'Stray dog monitoring', camera: 'Residential street (AI-generated footage)',
+    camera2: 'Street from a higher pole (AI-generated footage)', description: TEXT['Stray dog monitoring'] };
   const STRAY_ANALYTIC = { name: 'Unaccompanied dog', model_id: 3, conf: 0.2, classes: ['dog'],
     rule: { condition: 'unaccompanied', min_seconds: 2, cooldown_seconds: 15, severity: 'warning', companions: ['person'], companion_radius: 3, blur_people: true } };
   function addStrayCamera2(p) {                                 // a second camera in the stray example
@@ -55,6 +68,7 @@
     addStrayCamera2(p);
   }
   function addPresets() {
+    tidyText();
     if (S.presets === 3) {                                       // earlier visitors: refresh the stray example text, then fall through
       S.projects.forEach(p => { p.description = (p.description || '').replace(' The detector is YOLOv8n from Ultralytics.', '').replace('a dedicated PPE model', 'a dedicated safety-gear model'); });
       const p = S.projects.find(x => x.name === STRAY.name);
@@ -82,13 +96,13 @@
       S.projects.forEach(p => { p.description = (p.description || '').replace(' The detector is YOLOv8n from Ultralytics.', '').replace('a dedicated PPE model', 'a dedicated safety-gear model'); });
       S.presets = 8; save(); return;
     }
-    mk('Example: Workplace safety', 'Raise an alert when a person walks into a marked floor zone. Press Start on the camera. Checking hard hats needs a dedicated safety-gear model, which the server version can load.',
+    mk('Workplace safety', TEXT['Workplace safety'],
       'Warehouse floor', 'safety', [{ name: 'Person in the marked zone', model_id: 3, conf: 0.35, classes: ['person'], roi: [[0.06, 0.34], [0.58, 0.2], [0.93, 0.58], [0.5, 0.98], [0.02, 0.8]], rule: { min_seconds: 1, cooldown_seconds: 8, severity: 'critical' } }]);
-    mk('Example: Traffic', 'Warn when the road is busy: two or more vehicles in view for a couple of seconds. Cars, trucks, buses and motorbikes are counted.',
+    mk('Traffic', TEXT['Traffic'],
       'Road from above', 'traffic', [{ name: 'Busy road', model_id: 3, conf: 0.3, classes: ['car', 'truck', 'bus', 'motorcycle'], rule: { count: 2, min_seconds: 2, cooldown_seconds: 10, severity: 'warning' } }]);
-    mk('Example: Retail', 'Notice a customer who stays in an aisle. An info alert fires when a person is in the aisle for several seconds.',
+    mk('Retail', TEXT['Retail'],
       'Shop aisle', 'retail', [{ name: 'Customer in the aisle', model_id: 3, conf: 0.3, classes: ['person'], rule: { min_seconds: 3, cooldown_seconds: 15, severity: 'info' } }]);
-    mk('Example: Sorting and counting', 'Count items on a table. This one counts bottles, the same idea as counting recyclables or products on a line.',
+    mk('Sorting and counting', TEXT['Sorting and counting'],
       'Table', 'bottles', [{ name: 'Two or more bottles', model_id: 3, conf: 0.3, classes: ['bottle'], rule: { count: 2, min_seconds: 1, cooldown_seconds: 10, severity: 'info' } }]);
     addStray(mk);
     S.presets = 8; save();
