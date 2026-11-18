@@ -555,16 +555,20 @@
       }
       const packs = [];
       if (cond === 'group') {
-        const sizes = groupSizes(conf.map(t => t.box), +a.rule.group_radius || 2);   // boxes seen in this frame only
+        // a dog with a person near it (on a lead) is not part of a stray pack, for a second after the person was last near
+        const people = a.comp.map(c => c.box), reach = +a.rule.companion_radius || 3;
+        conf.forEach(t => { if (people.length && !isAlone(t.box, people, reach)) t.nearPersonTs = ts; });
+        const free = conf.filter(t => ts - (t.nearPersonTs ?? -9) > 1);
+        const sizes = groupSizes(free.map(t => t.box), +a.rule.group_radius || 2);   // boxes seen in this frame only
         const need = Math.max(2, +a.rule.count || 2), seen = new Set();
-        conf.forEach((t, i) => {                                   // one outline around each group big enough to alert on
+        free.forEach((t, i) => {                                   // one outline around each group big enough to alert on
           if (sizes[i] < need || seen.has(t.id)) return;
           const near = [t], queue = [t]; seen.add(t.id);
-          while (queue.length) { const u = queue.pop(); conf.forEach(v => { if (!seen.has(v.id) && groupSizes([u.box, v.box], +a.rule.group_radius || 2)[0] === 2) { seen.add(v.id); near.push(v); queue.push(v); } }); }
+          while (queue.length) { const u = queue.pop(); free.forEach(v => { if (!seen.has(v.id) && groupSizes([u.box, v.box], +a.rule.group_radius || 2)[0] === 2) { seen.add(v.id); near.push(v); queue.push(v); } }); }
           packs.push([[Math.min(...near.map(v => v.box[0])), Math.min(...near.map(v => v.box[1])), Math.max(...near.map(v => v.box[2])), Math.max(...near.map(v => v.box[3]))], near.length]);
         });
-        conf.forEach((t, i) => { t.groupNow = sizes[i]; t.group = Math.max(t.group, sizes[i]); });
-        coast.forEach(t => { t.groupNow = 1; });                       // a held box is not counted, so it shows no group either
+        conf.concat(coast).forEach(t => { t.groupNow = 1; });       // dogs with a person, and held boxes, are in no group
+        free.forEach((t, i) => { t.groupNow = sizes[i]; t.group = Math.max(t.group, sizes[i]); });
         a.group_now = sizes.length ? Math.max(...sizes) : 0;
       }
       if (packs.length || ts - (a.packsTs ?? -9) > 0.5) { a.packs = packs; if (packs.length) a.packsTs = ts; }   // keep the outline for half a second
@@ -621,7 +625,7 @@
     draw(w, h) {                                                   // port of CameraRunner._draw
       this.out.width = w; this.out.height = h; const g = this.out.getContext('2d'); g.drawImage(this.work, 0, 0);
       g.lineWidth = 2; g.font = '13px system-ui';
-      const placed = [], marks = new Map(), packs = [], counters = [];
+      const placed = [], marks = new Map(), packs = [], counters = [], people = new Map();
       const tag = (text, x1, y1, x2, y2, color, ink = '#0d1115') => {    // above the box, else below it, else inside its top edge
         const tw = g.measureText(text).width + 8, th = 18;
         const spots = [[x1, y1 - th], [x1, y2], [x1, y1], ...[1, 2, 3].map(k => [x1, y1 - th - k * th]), ...[1, 2, 3].map(k => [x1, y2 + k * th])].map(([sx, sy]) => [Math.min(Math.max(0, sx), w - tw), Math.min(Math.max(0, sy), h - th)]);
@@ -645,6 +649,16 @@
         }
         const unacc = a.rule.condition === 'unaccompanied';
         (a.packs || []).forEach(p => packs.push(p));
+        if (a.rule.condition === 'unaccompanied' || a.rule.condition === 'group') {   // show the people the rule measures against, once seen for a
+          const now = performance.now() / 1000, prev = a.prevPeople || [];             // quarter second (and 2 frames) and not on top of a tracked dog
+          const dogs = [...a.dets, ...(a.coast || [])].filter(d => d.confirmed).map(d => d.box);
+          a.prevPeople = (a.comp || []).map(c => {
+            const m = prev.filter(([p]) => iou(c.box, p) > 0.3), since = m.length ? Math.min(...m.map(x => x[1])) : now, n = 1 + Math.max(0, ...m.map(x => x[2]));
+            const big = c.box[3] - c.box[1] >= 0.1 * h;                  // too small to tell apart from a far dog
+            if (big && n >= 2 && now - since >= 0.2 && !dogs.some(b => iou(c.box, b) > 0.3)) people.set(c.box.map(v => Math.round(v / 4)).join(','), c);
+            return [c.box, since, n];
+          });
+        }
         for (const d of [...a.dets, ...(a.coast || [])]) {       // analytics on the same model see the same box: draw it once
           if (!d.confirmed) continue;                              // a box seen once is not drawn, so single-frame flashes do not show
           const key = d.box.map(v => Math.round(v / 4)).join(','), m = marks.get(key) || { box: d.box, label: d.label, id: null, notes: [], color: a.color, prio: 0 };
@@ -667,9 +681,11 @@
       const PACK = '#faa028', pad = b => [Math.max(0, b[0] - 10), Math.max(0, b[1] - 10), Math.min(w - 1, b[2] + 10), Math.min(h - 1, b[3] + 10)];
       g.lineWidth = 2; g.font = '13px system-ui';
       packs.forEach(([b]) => { const [x1, y1, x2, y2] = pad(b); g.strokeStyle = PACK; g.strokeRect(x1, y1, x2 - x1, y2 - y1); });
+      g.lineWidth = 1; people.forEach(c => { const [x1, y1, x2, y2] = c.box; g.strokeStyle = '#d7d7d7'; g.strokeRect(x1, y1, x2 - x1, y2 - y1); }); g.lineWidth = 2;
       for (const m of marks.values()) { const [x1, y1, x2, y2] = m.box; g.strokeStyle = m.color; g.strokeRect(x1, y1, x2 - x1, y2 - y1); }
       [...marks.values()].sort((p, q) => q.prio - p.prio || (p.id ?? 0) - (q.id ?? 0)).forEach(m => tag(`${m.label}${m.id !== null ? ' #' + m.id : ''}${m.notes.join('')}`, ...m.box, m.color));   // important labels get the free spots
       packs.forEach(([b, n]) => { const [x1, y1, x2, y2] = pad(b); tag(`pack of ${n}`, x1, y1, x2, y2, PACK); });
+      [...people.values()].sort((p, q) => p.box[0] - q.box[0]).forEach(c => tag(c.label, ...c.box, '#d7d7d7'));
       g.fillStyle = '#fff'; g.font = '12px system-ui'; g.fillText(new Date().toLocaleString(), 8, h - 8);
     }
     alert(a, fired) {

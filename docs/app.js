@@ -505,7 +505,7 @@ async function analyticForm(cid, a) {
       <div class="field"><label>Near means within this many dog-heights</label><input id="r-rad" type="number" min="0.5" max="20" step="0.5" value="${r.companion_radius ?? 3}"></div></div>
     </div>
     <div id="r-group" class="${r.condition === 'group' ? '' : 'hidden'}">
-      <div class="muted small" style="margin:-4px 0 10px">Alerts when that many objects stand close together, for example a pack of dogs.</div>
+      <div class="muted small" style="margin:-4px 0 10px">Alerts when that many objects stand close together, for example a pack of dogs. A dog with a person near it is not counted.</div>
       <div class="field"><label>Close means within this many object-heights of each other</label><input id="r-grad" type="number" min="0.5" max="20" step="0.5" value="${r.group_radius ?? 2}"></div>
     </div>
     <div id="r-still" class="${r.condition === 'still' ? '' : 'hidden'}">

@@ -19,6 +19,7 @@ COAST = 1.0                  # seconds a missed track keeps its box on screen
 ALONE = (60, 60, 235)        # BGR red for an unaccompanied target, a group or an object that stopped
 WITH = (250, 140, 60)        # BGR blue for a target with a companion nearby
 PACK = (40, 160, 250)        # BGR orange for the outline around a group
+PERSON = (215, 215, 215)     # BGR light grey for people, who are context and not the target
 
 os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
 
@@ -399,19 +400,27 @@ class CameraRunner:
         if cond == "group":
             # only boxes seen in this frame: a held box can belong to an object that already left
             radius = float(a.rule.get("group_radius") or 2.0)
-            sizes = group_sizes([t.box for t in confirmed], radius)
+            # a dog with a person near it (on a lead, being walked) is not part of a stray pack. It stays out
+            # for a second after the person was last seen near it, so a missed person does not pull it in
+            people = [c["box"] for c in a.last_companions]
+            near = float(a.rule.get("companion_radius") or 3.0)
+            for t in confirmed:
+                if people and not is_alone(t.box, people, near):
+                    t.near_person_ts = ts
+            free = [t for t in confirmed if ts - getattr(t, "near_person_ts", -9) > 1.0]
+            sizes = group_sizes([t.box for t in free], radius)
             members = {}
-            for t, root in zip(confirmed, groups([t.box for t in confirmed], radius)):
+            for t, root in zip(free, groups([t.box for t in free], radius)):
                 members.setdefault(root, []).append(t.box)
             for boxes in members.values():               # one outline around each group big enough to alert on
                 if len(boxes) >= max(2, int(a.rule.get("count") or 2)):
                     packs.append(([min(b[0] for b in boxes), min(b[1] for b in boxes),
                                    max(b[2] for b in boxes), max(b[3] for b in boxes)], len(boxes)))
-            for t, n in zip(confirmed, sizes):
+            for t in confirmed + coast:                  # dogs with a person, and held boxes, are in no group
+                t.group_now = 1
+            for t, n in zip(free, sizes):
                 t.group_now = n
                 t.group_max = max(getattr(t, "group_max", 1), n)
-            for t in coast:                              # a held box is not counted, so it shows no group either
-                t.group_now = 1
             a.group_now = max(sizes, default=0)
         if packs or ts - getattr(a, "packs_ts", -9) > 0.5:    # keep the outline for half a second so it does not blink
             a.packs, a.packs_ts = packs, (ts if packs else getattr(a, "packs_ts", -9))
@@ -526,7 +535,7 @@ class CameraRunner:
             cv2.putText(frame, text, (sx + 4, sy + th - 6), font, scale, ink, 1, cv2.LINE_AA)
 
         marks = {}                  # analytics on the same model see the same box: draw it once
-        packs, counters = [], []
+        packs, counters, people = [], [], {}
         for a in self.analytics:
             if a.roi and len(a.roi) >= 3:
                 pts = np.array([[int(p[0] * w), int(p[1] * h)] for p in a.roi], np.int32)
@@ -544,6 +553,21 @@ class CameraRunner:
                 counters.append((a, f"in {a.n_in}  out {a.n_out}"))
             unacc = a.rule.get("condition") == "unaccompanied"
             packs += getattr(a, "packs", [])
+            if a.rule.get("condition") in ("unaccompanied", "group"):
+                # show the people the rule measures against, once seen for a quarter second (and 2 frames) in a row
+                # and not on top of a tracked dog, so a brief wrong guess (a far dog called a person) is not drawn
+                now = time.time()
+                prev = getattr(a, "prev_people", [])
+                dogs = [d["box"] for d in list(getattr(a, "last_dets", [])) + list(getattr(a, "coast", [])) if d.get("confirmed")]
+                seen = []
+                for c in getattr(a, "last_companions", []):
+                    match = [(since, k) for p, since, k in prev if iou(c["box"], p) > 0.3]
+                    since, n = (min(m[0] for m in match), 1 + max(m[1] for m in match)) if match else (now, 1)
+                    seen.append((c["box"], since, n))
+                    big = c["box"][3] - c["box"][1] >= 0.1 * h        # too small to tell apart from a far dog
+                    if big and n >= 2 and now - since >= 0.2 and not any(iou(c["box"], b) > 0.3 for b in dogs):
+                        people.setdefault(tuple(int(round(v / 4)) for v in c["box"]), c)
+                a.prev_people = seen
             for d in list(getattr(a, "last_dets", [])) + list(getattr(a, "coast", [])):
                 if not d.get("confirmed"):               # a box seen once is not drawn, so single-frame flashes do not show
                     continue
@@ -570,6 +594,9 @@ class CameraRunner:
             x1, y1, x2, y2 = [int(v) for v in box]
             x1, y1, x2, y2 = max(0, x1 - 10), max(0, y1 - 10), min(w - 1, x2 + 10), min(h - 1, y2 + 10)
             cv2.rectangle(frame, (x1, y1), (x2, y2), PACK, 2, cv2.LINE_AA)
+        for c in people.values():
+            x1, y1, x2, y2 = [int(v) for v in c["box"]]
+            cv2.rectangle(frame, (x1, y1), (x2, y2), PERSON, 1, cv2.LINE_AA)
         for m in marks.values():
             x1, y1, x2, y2 = [int(v) for v in m["box"]]
             cv2.rectangle(frame, (x1, y1), (x2, y2), m["color"], 2)
@@ -580,6 +607,9 @@ class CameraRunner:
         for box, n in packs:
             x1, y1, x2, y2 = [int(v) for v in box]
             tag(f"pack of {n}", max(0, x1 - 10), max(0, y1 - 10), x2, y2 + 10, PACK)
+        for c in sorted(people.values(), key=lambda c: c["box"][0]):
+            x1, y1, x2, y2 = [int(v) for v in c["box"]]
+            tag(c["label"], x1, y1, x2, y2, PERSON)
         stamp = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cv2.putText(frame, stamp, (10, h - 10), font, scale, (255, 255, 255), 1, cv2.LINE_AA)
 
