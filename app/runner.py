@@ -391,6 +391,8 @@ class CameraRunner:
             for t, n in zip(confirmed, sizes):
                 t.group_now = n
                 t.group_max = max(getattr(t, "group_max", 1), n)
+            for t in coast:                              # a held box is not counted, so it shows no group either
+                t.group_now = 1
             a.group_now = max(sizes, default=0)
         hold = float(a.rule.get("min_seconds") or 0)
         a.still_longest = max([getattr(t, "still_seconds", 0.0) for t in shown], default=0.0)

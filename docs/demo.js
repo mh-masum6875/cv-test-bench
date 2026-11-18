@@ -550,6 +550,7 @@
       if (cond === 'group') {
         const sizes = groupSizes(conf.map(t => t.box), +a.rule.group_radius || 2);   // boxes seen in this frame only
         conf.forEach((t, i) => { t.groupNow = sizes[i]; t.group = Math.max(t.group, sizes[i]); });
+        coast.forEach(t => { t.groupNow = 1; });                       // a held box is not counted, so it shows no group either
         a.group_now = sizes.length ? Math.max(...sizes) : 0;
       }
       const hold = +a.rule.min_seconds || 0;
