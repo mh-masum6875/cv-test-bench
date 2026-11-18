@@ -20,8 +20,11 @@ What is new:
 | --- | --- | --- |
 | Tracking with IDs | `app/tracking.py` | IoU matching with a centre-distance fallback, no extra packages. Gives a count of tracked visits and time in view per dog. A dog hidden for more than a few seconds comes back with a new ID |
 | "An object is alone" rule | Analytic editor, `condition: unaccompanied` | A dog counts only when no person is within N dog-heights (default 3). Red box = alone, blue = with a person |
-| Sightings log | `sightings` table | One row per tracked visit: first and last seen, time in view, time alone, largest group, position |
-| Hotspot heatmap | Insights tab, `GET /api/cameras/{id}/heatmap` | Where dogs stood (foot point) over the last day, week or month |
+| Sightings log | `sightings` table | One row per tracked visit: first and last seen, time in view, time alone, largest group, longest time still, line crossings, position. Analytics with the same model, classes and zone share one tracker, so a dog is logged once however many rules watch it |
+| Pack alert | Analytic editor, `condition: group` | N or more dogs within R dog-heights of each other, chained through neighbours. The alert says the group size |
+| Dog not moving | Analytic editor, `condition: still` | A dog whose feet stay within a set share of the frame width (default 3%) for the hold time, for example a dog lying in the road |
+| Road crossings | Counting line in the analytic editor, `condition: crossing` | Counts each tracked dog crossing the line, in each direction. Per hour on the Insights tab and in `GET /api/projects/{id}/crossings.csv` |
+| Hotspot heatmap | Insights tab, `GET /api/cameras/{id}/heatmap?label=dog` | Where dogs stood (foot point) over the last day, week or month. The class picker on the Insights tab limits the whole tab to one class |
 | Trends | Insights tab, `GET /api/projects/{id}/insights` | Totals, by hour of day, by day, per camera. In the hosted demo the same data is kept in your browser |
 | CSV export | `GET /api/projects/{id}/sightings.csv` | For council reports |
 | Privacy | "Blur faces" option on the analytic | The head area of each detected person is blurred in the live view, the stored stills and alert pictures. People stay visible otherwise |
@@ -43,4 +46,7 @@ Limits:
 * The bundled YOLOv8 weights are AGPL-3.0. Use RF-DETR (Apache 2.0) or an Ultralytics licence for a commercial product.
 * The synthetic clip from `scripts/make_stray_demo_video.py` only checks the pipeline. Do not use it as evidence of accuracy.
 
-Tests (from the repository root): `python -m pytest tests/test_tracking.py tests/test_rules.py`
+* On the example clip "Dog not moving" is set to 3 seconds because the clip is 10 seconds long. On a
+  real street use 30 seconds or more.
+
+Tests (from the repository root): `python -m pytest tests/test_tracking.py tests/test_rules.py tests/test_analytics.py`

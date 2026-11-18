@@ -35,8 +35,11 @@ class RuleState:
         if not in_schedule(rule, now):
             self.since = None
             return None
-        if rule["condition"] == "absent":
+        cond = rule["condition"]
+        if cond == "absent":
             holds = count == 0
+        elif cond in ("still", "crossing"):        # count is already "objects still long enough" or "crossings now"
+            holds = count >= 1
         else:
             holds = count >= max(1, int(rule.get("count", 1)))
         if not holds:
@@ -45,16 +48,26 @@ class RuleState:
         if self.since is None:
             self.since = ts
         held = ts - self.since
-        if held < float(rule["min_seconds"]):
+        # "still" measures the hold time per object, and a crossing is a single moment
+        if cond not in ("still", "crossing") and held < float(rule["min_seconds"]):
             return None
         if self.last_alert is not None and ts - self.last_alert < float(rule["cooldown_seconds"]):
             return None
         self.last_alert = ts
-        if rule["condition"] == "absent":
+        name = rule.get("target_name") or "object"
+        plural = "s" if count > 1 else ""
+        if cond == "absent":
             msg = f"Nothing detected for {held:.0f}s"
-        elif rule["condition"] == "unaccompanied":
-            name = rule.get("target_name") or "object"
-            msg = f"{count} unaccompanied {name}{'s' if count > 1 else ''} for {held:.0f}s"
+        elif cond == "unaccompanied":
+            msg = f"{count} unaccompanied {name}{plural} for {held:.0f}s"
+        elif cond == "group":
+            msg = f"Group of {count} {name}s together for {held:.0f}s"
+        elif cond == "still":
+            held = float(rule.get("still_for") or rule["min_seconds"])
+            msg = f"{count} {name}{plural} not moving for {held:.0f}s"
+        elif cond == "crossing":
+            way = rule.get("direction") or "in"
+            msg = f"{count} {name}{plural} crossed the line ({way})"
         else:
             msg = f"{count} object(s) present for {held:.0f}s"
         return {"message": msg, "severity": rule["severity"], "held": round(held, 1)}

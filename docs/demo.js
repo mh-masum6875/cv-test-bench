@@ -5,7 +5,7 @@
   const KEY = 'cvtb:v1';
   const COCO = ['person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat', 'traffic light', 'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe', 'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee', 'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat', 'baseball glove', 'skateboard', 'surfboard', 'tennis racket', 'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch', 'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop', 'mouse', 'remote', 'keyboard', 'cell phone', 'microwave', 'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush'];
   const DEFAULT_RULE = { condition: 'count_gte', count: 1, min_seconds: 3, cooldown_seconds: 30, severity: 'warning', days: [0, 1, 2, 3, 4, 5, 6], start: '00:00', end: '23:59',
-    companions: ['person'], companion_radius: 3, blur_people: false };
+    companions: ['person'], companion_radius: 3, blur_people: false, group_radius: 2, still_tolerance: 3, line: [], line_direction: 'both' };
   const HEAT_W = 32, HEAT_H = 18, STILLS = 'cvtb:stills';
   const COLORS = ['#2ebeaa', '#3c8cfa', '#faaa3c', '#c85adc', '#5ac85a', '#5050f0'];
   const MODELS = [
@@ -19,9 +19,9 @@
   /* Card texts for the ready-made projects. */
   const TEXT = {
     'Welcome project': 'Add your own video, webcam or stream and compare detectors on it.',
-    'Stray dog monitoring': 'Flags a dog with no person near it and maps where dogs are seen. The clips are AI-generated.',
+    'Stray dog monitoring': 'Alerts on lone dogs, packs and dogs that stop, counts road crossings and maps where dogs go. The clips are AI-generated.',
     'Workplace safety': 'Alerts when a person walks into a marked floor zone.',
-    'Traffic': 'Warns when two or more vehicles are on the road.',
+    'Traffic': 'Warns when the road is busy and counts vehicles in each direction.',
     'Retail': 'Alerts when a customer stays in an aisle.',
     'Sorting and counting': 'Counts bottles on a table.',
   };
@@ -107,6 +107,28 @@
     addStray(mk);
     S.presets = 8; save();
   }
+  /* More dog analytics on the first stray camera. They share one detector run per frame. */
+  const DOG_EXTRAS = [
+    { name: 'Pack of dogs', rule: { condition: 'group', count: 3, group_radius: 2, min_seconds: 1, cooldown_seconds: 15, severity: 'warning' } },
+    { name: 'Dog not moving', rule: { condition: 'still', still_tolerance: 3, min_seconds: 3, cooldown_seconds: 20, severity: 'info' } },
+    { name: 'Dogs crossing the road', rule: { condition: 'crossing', line: [[0.4, 0.98], [0.4, 0.42]], line_direction: 'both', min_seconds: 0, cooldown_seconds: 5, severity: 'info' } }];
+  function addDogExtras() {                                     // once, for new and earlier visitors
+    if (S.dogx === 1) return;
+    const p = S.projects.find(x => x.name === STRAY.name), c = p && S.cameras.find(x => x.project_id === p.id && x.source === 'samples/stray');
+    if (c) {
+      p.description = STRAY.description;
+      const t = Date.now() / 1000;
+      DOG_EXTRAS.forEach(e => { if (!S.analytics.some(a => a.camera_id === c.id && a.name === e.name))
+        S.analytics.push({ id: nid('a'), camera_id: c.id, enabled: 1, webhook_url: '', created_at: t, roi: [], model_id: 3, conf: 0.2, classes: ['dog'], name: e.name, rule: { ...DEFAULT_RULE, ...e.rule } }); });
+    }
+    const tp = S.projects.find(x => x.name === 'Traffic'), tc = tp && S.cameras.find(x => x.project_id === tp.id && x.source === 'samples/traffic');
+    if (tc && !S.analytics.some(a => a.camera_id === tc.id && a.name === 'Vehicles in each direction')) {
+      tp.description = TEXT['Traffic']; tc.fps_limit = Math.max(tc.fps_limit, 6);       // fast cars need more frames to keep their ID
+      S.analytics.push({ id: nid('a'), camera_id: tc.id, enabled: 1, webhook_url: '', created_at: Date.now() / 1000, roi: [], model_id: 3, conf: 0.3, classes: ['car', 'truck', 'bus', 'motorcycle'],
+        name: 'Vehicles in each direction', rule: { ...DEFAULT_RULE, condition: 'crossing', line: [[0.05, 0.55], [0.8, 0.55]], line_direction: 'both', min_seconds: 0, cooldown_seconds: 30, severity: 'info' } });
+    }
+    S.dogx = 1; save();
+  }
   function addStray(mk) {
     mk(STRAY.name, STRAY.description, STRAY.camera, 'stray', [{ ...STRAY_ANALYTIC, classes: [...STRAY_ANALYTIC.classes], rule: { ...STRAY_ANALYTIC.rule } }]);
     addStrayCamera2(S.projects.find(x => x.name === STRAY.name));
@@ -135,16 +157,21 @@
     update(rule, count, ts, now) {
       rule = { ...DEFAULT_RULE, ...(rule || {}) };
       if (!inSchedule(rule, now)) { this.since = null; return null; }
-      const holds = rule.condition === 'absent' ? count === 0 : count >= Math.max(1, +rule.count || 1);   // unaccompanied: count = dogs alone
+      const cond = rule.condition, once = cond === 'still' || cond === 'crossing';   // still: hold time is per object; crossing: a moment
+      const holds = cond === 'absent' ? count === 0 : once ? count >= 1 : count >= Math.max(1, +rule.count || 1);   // unaccompanied: count = dogs alone
       if (!holds) { this.since = null; return null; }
       if (this.since === null) this.since = ts;
-      const held = ts - this.since;
-      if (held < +rule.min_seconds) return null;
+      let held = ts - this.since;
+      if (!once && held < +rule.min_seconds) return null;
       if (this.last !== null && ts - this.last < +rule.cooldown_seconds) return null;
       this.last = ts;
-      const name = rule.target_name || 'object';
-      const message = rule.condition === 'absent' ? `Nothing detected for ${Math.round(held)}s`
-        : rule.condition === 'unaccompanied' ? `${count} unaccompanied ${name}${count > 1 ? 's' : ''} for ${Math.round(held)}s`
+      const name = rule.target_name || 'object', pl = count > 1 ? 's' : '';
+      if (cond === 'still') held = +rule.still_for || +rule.min_seconds;
+      const message = cond === 'absent' ? `Nothing detected for ${Math.round(held)}s`
+        : cond === 'unaccompanied' ? `${count} unaccompanied ${name}${pl} for ${Math.round(held)}s`
+        : cond === 'group' ? `Group of ${count} ${name}s together for ${Math.round(held)}s`
+        : cond === 'still' ? `${count} ${name}${pl} not moving for ${Math.round(held)}s`
+        : cond === 'crossing' ? `${count} ${name}${pl} crossed the line (${rule.direction || 'in'})`
         : `${count} object(s) present for ${Math.round(held)}s`;
       return { message, severity: rule.severity, held: Math.round(held * 10) / 10 };
     }
@@ -338,6 +365,27 @@
     const [cx, cy] = centre(box), reach = Math.max(box[3] - box[1], box[2] - box[0], 1) * radius;
     return !companions.some(c => Math.hypot(cx - Math.min(Math.max(cx, c[0]), c[2]), cy - Math.min(Math.max(cy, c[1]), c[3])) <= reach);
   }
+  function groupSizes(boxes, radius) {                         // port of app/tracking.py groups()
+    const parent = boxes.map((_, i) => i), root = i => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
+    for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) {
+      const a = boxes[i], b = boxes[j], [ax, ay] = centre(a), [bx, by] = centre(b), reach = Math.max(a[3] - a[1], b[3] - b[1], 1) * radius;
+      if (Math.hypot(ax - bx, ay - by) <= reach) parent[root(i)] = root(j);
+    }
+    const g = boxes.map((_, i) => root(i)); return g.map(x => g.filter(y => y === x).length);
+  }
+  function stillUpdate(t, foot, ts, tol) {
+    if (!t.anchor || Math.hypot(foot[0] - t.anchor[0], foot[1] - t.anchor[1]) > tol) { t.anchor = foot; t.stillSince = ts; }
+    return (t.stillSec = ts - t.stillSince);
+  }
+  const side = (p, a, b) => (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]);
+  function crossing(prev, cur, a, b) {                          // +1 into the right side of a->b, -1 out of it, 0 no crossing
+    if (!prev) return 0;
+    const s1 = side(prev, a, b), s2 = side(cur, a, b);
+    if (s1 === 0 || s2 === 0 || (s1 > 0) === (s2 > 0)) return 0;
+    const t1 = side(a, prev, cur), t2 = side(b, prev, cur);
+    if (t1 !== 0 && t2 !== 0 && (t1 > 0) === (t2 > 0)) return 0;
+    return s2 > 0 ? 1 : -1;
+  }
   const dayKey = ts => { const d = new Date(ts * 1000); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
   let stills = {}; try { stills = JSON.parse(localStorage.getItem(STILLS)) || {}; } catch (e) { }
   const saveStills = () => { try { localStorage.setItem(STILLS, JSON.stringify(stills)); } catch (e) { } };
@@ -377,7 +425,7 @@
       } catch (e) { this.status = 'error'; this.message = e.message || String(e); this.drawStatus(this.message.length > 70 ? this.message.slice(0, 67) + '...' : this.message); }
     }
     stop() {
-      (this.analytics || []).forEach(a => { if (a.tracker) this.endTracks(a, a.tracker.flush()); });
+      this.closeGroups();
       this.stopped = true; this.status = 'stopped'; try { this.video.pause(); } catch (e) { }
       if (this.video.srcObject) this.video.srcObject.getTracks().forEach(t => t.stop());
       if (this.hls) this.hls.destroy(); this.drawStatus('Stopped. Press Start.');
@@ -390,16 +438,26 @@
         this.timer = setTimeout(() => this.loop(), wait);
       });
     }
+    closeGroups() { (this.groups || []).forEach(g => this.endTracks(g, g.tracker.flush())); this.groups = []; }
     loadAnalytics() {
-      (this.analytics || []).forEach(a => this.endTracks(a, a.tracker ? a.tracker.flush() : []));
+      this.closeGroups();
       this.analytics = S.analytics.filter(a => a.camera_id === this.id && a.enabled).map((row, i) => {
         const model = find(allModels(), row.model_id);
         const rule = { ...DEFAULT_RULE, ...(row.rule || {}) };
         const a = { row, color: COLORS[i % COLORS.length], state: new RuleState(), rule, classes: row.classes.map(x => x.toLowerCase()), count: 0, infer_ms: 0, total: 0, labels: {}, history: [], dets: [], error: null, det: null,
-          companions: (rule.companions || []).map(x => x.toLowerCase()), comp: [], tracker: new Tracker(), tracks_now: 0, alone_now: 0, unique: 0, counted: new Set() };
+          companions: (rule.companions || []).map(x => x.toLowerCase()), comp: [], trk: null, tracks_now: 0, alone_now: 0,
+          line: (rule.line || []).length === 2 ? rule.line : null, n_in: 0, n_out: 0, group_now: 0, still_now: 0, still_longest: 0, dir: 'in' };
         try { if (!model) throw new Error('Model was deleted'); a.det = model.kind === 'cocossd' ? new Coco() : model.kind === 'yolo' ? new Yolo(model) : new Motion(); } catch (e) { a.error = e.message; }
         return a;
       });
+      // analytics with the same model, threshold, classes and zone share one tracker: one ID, one sighting and one heatmap count per object
+      const groups = new Map();
+      this.analytics.filter(a => a.det).forEach(a => {
+        const key = JSON.stringify([a.row.model_id, +a.row.conf, [...a.classes].sort(), a.row.roi || []]);
+        if (!groups.has(key)) groups.set(key, { members: [], tracker: new Tracker(), unique: 0, counted: new Set(), dets: [], conf: [], coast: [] });
+        const g = groups.get(key); g.members.push(a); a.trk = g;
+      });
+      this.groups = [...groups.values()];
       this.reloadFlag = false;
     }
     async step() {
@@ -409,19 +467,32 @@
       const scale = Math.min(1, 640 / v.videoWidth), w = Math.round(v.videoWidth * scale), h = Math.round(v.videoHeight * scale);
       this.work.width = w; this.work.height = h; this.wg.drawImage(v, 0, 0, w, h); this.size = [v.videoWidth, v.videoHeight];
       const now = Date.now() / 1000, date = new Date();
+      // analytics that use the same model share one detection per frame, at the lowest threshold among them
+      const lowest = {}, shared = {};
+      this.analytics.forEach(a => { if (a.det) lowest[a.row.model_id] = Math.min(lowest[a.row.model_id] ?? 1, +a.row.conf); });
       for (const a of this.analytics) {
         if (!a.det) continue;
-        const t = performance.now(); let dets = [];
-        try { dets = await a.det.detect(this.work, w, h, +a.row.conf); a.error = null; } catch (e) { a.error = e.message; }
-        a.infer_ms = performance.now() - t;
-        a.loading = a.det.loading;
+        const k = a.row.model_id;
+        if (!shared[k]) {
+          const t = performance.now(), r = { dets: [], error: null, det: a.det };
+          try { r.dets = await a.det.detect(this.work, w, h, lowest[k]); } catch (e) { r.error = e.message; }
+          r.ms = performance.now() - t; shared[k] = r;
+        }
+        const r = shared[k]; let dets = r.dets.filter(d => d.conf >= +a.row.conf).map(d => ({ ...d }));
+        a.error = r.error; a.infer_ms = r.ms;
+        a.loading = r.det.loading;
         a.comp = dets.filter(d => a.companions.includes(d.label.toLowerCase()));
-        dets = dets.filter(d => (!a.classes.length || a.classes.includes(d.label.toLowerCase())) && inside(d.box, a.row.roi, w, h));
-        this.track(a, dets, now, w, h);
-        a.dets = dets; a.count = a.rule.condition === 'unaccompanied' ? a.alone_now : dets.length; a.total += dets.length; a.labels = {};
+        a.found = dets.filter(d => (!a.classes.length || a.classes.includes(d.label.toLowerCase())) && inside(d.box, a.row.roi, w, h));
+      }
+      this.groups.forEach(g => this.trackGroup(g, now, w, h));
+      for (const a of this.analytics) {
+        if (!a.det) continue;
+        const crossed = this.rules(a, a.trk, now, w, h), cond = a.rule.condition, dets = a.dets;
+        a.count = cond === 'unaccompanied' ? a.alone_now : cond === 'group' ? a.group_now : cond === 'still' ? a.still_now : cond === 'crossing' ? crossed : dets.length; a.total += dets.length; a.labels = {};
         dets.forEach(d => a.labels[d.label] = (a.labels[d.label] || 0) + 1);
         a.history.push([now, a.count, a.infer_ms]); if (a.history.length > 180) a.history.shift();
       }
+      this.groups.forEach(g => { g.conf.forEach(t => { t.lastFoot = t.foot; }); this.endTracks(g, g.ended); });
       this.blur(w, h);
       this.raw = this.work.toDataURL('image/jpeg', 0.7);
       const ready = this.analytics.every(a => !a.det || (!a.det.loading && a.infer_ms > 0 && !a.error));   // wait for the model so people are blurred
@@ -429,49 +500,89 @@
       this.draw(w, h);
       for (const a of this.analytics) {
         if (!a.det) continue;
-        const fired = a.state.update({ ...a.rule, target_name: a.classes[0] || 'object' }, a.count, now, date);
+        const fired = a.state.update({ ...a.rule, target_name: a.classes[0] || 'object', still_for: a.still_longest, direction: a.dir }, a.count, now, date);
         if (fired) this.alert(a, fired);
       }
       this.outN++;
       const el = (performance.now() - this.t0) / 1000;
       if (el >= 2) { this.fps_out = this.outN / el; this.fps_in = this.frames / el; this.outN = 0; this.frames = 0; this.t0 = performance.now(); }
     }
-    track(a, dets, ts, w, h) {
-      const { live, ended } = a.tracker.update(dets, ts), check = a.rule.condition === 'unaccompanied', radius = +a.rule.companion_radius || 3;
-      const people = a.comp.map(c => c.box), conf = live.filter(t => t.hits >= a.tracker.minHits), heat = this.heatFor(ts);
-      let alone = 0;
-      for (const t of conf) {
-        const was = t.alone; t.alone = check && isAlone(t.box, people, radius);
-        if (t.alone) { t.aloneFrames++; alone++; if (was) t.aloneSec += Math.min(ts - t.prev, a.tracker.maxAge); }
-        t.group = Math.max(t.group, conf.length);
-        const fx = Math.min(Math.max((t.box[0] + t.box[2]) / 2 / w, 0), 0.9999), fy = Math.min(Math.max(t.box[3] / h, 0), 0.9999);
-        t.pts.push([fx, fy]); heat[Math.floor(fy * HEAT_H) * HEAT_W + Math.floor(fx * HEAT_W)]++;
-        if (!a.counted.has(t.id)) { a.counted.add(t.id); a.unique++; }
+    trackGroup(g, ts, w, h) {                                      // port of CameraRunner._track_group
+      g.dets = g.members[0].found;
+      const { live, ended } = g.tracker.update(g.dets, ts); g.ended = ended;
+      g.conf = live.filter(t => t.hits >= g.tracker.minHits);
+      const heat = this.heatFor(ts), still = g.members.find(a => a.rule.condition === 'still'), plain = !g.members.some(a => a.rule.condition === 'group');
+      const tol = (+(still || {}).rule?.still_tolerance || 3) / 100 * w;
+      for (const t of g.conf) {
+        if (plain) t.group = Math.max(t.group, g.conf.length);
+        t.foot = [(t.box[0] + t.box[2]) / 2, t.box[3]];
+        t.stillMax = Math.max(t.stillMax || 0, stillUpdate(t, t.foot, ts, tol));
+        const fx = Math.min(Math.max(t.foot[0] / w, 0), 0.9999), fy = Math.min(Math.max(t.foot[1] / h, 0), 0.9999), lab = t.label.toLowerCase();
+        t.pts.push([fx, fy]); (heat[lab] = heat[lab] || new Array(HEAT_W * HEAT_H).fill(0))[Math.floor(fy * HEAT_H) * HEAT_W + Math.floor(fx * HEAT_W)]++;
+        if (!g.counted.has(t.id)) { g.counted.add(t.id); g.unique++; }
       }
-      const byId = new Map(conf.map(t => [t.id, t]));
-      dets.forEach(d => { const t = byId.get(d.track_id); d.confirmed = !!t; d.alone = !!(t && t.alone); });
       // a tracked dog missed for a moment keeps its last box for up to a second, so boxes and counts do not blink
       const liveIds = new Set(live.map(t => t.id));
-      const coast = a.tracker.tracks.filter(t => t.hits >= a.tracker.minHits && !liveIds.has(t.id) && ts - t.last <= 1.0
+      g.coast = g.tracker.tracks.filter(t => t.hits >= g.tracker.minHits && !liveIds.has(t.id) && ts - t.last <= 1.0
         && !live.some(l => iou(t.box, l.box) > 0.3));                // a held box under a live one is the same dog
-      a.coast = coast.map(t => ({ label: t.label, conf: t.conf, box: t.box, track_id: t.id, confirmed: true, alone: t.alone }));
-      a.tracks_now = conf.length + coast.length; a.alone_now = alone + coast.filter(t => t.alone).length;
-      this.endTracks(a, ended);
+      g.coast.forEach(t => { t.stillSec = ts - (t.stillSince ?? ts); });   // a stopped dog the detector misses for a moment is still stopped
     }
-    heatFor(ts) {
+    rules(a, g, ts, w, h) {                                        // port of CameraRunner._rules
+      const cond = a.rule.condition, conf = g.conf, coast = g.coast, shown = conf.concat(coast);
+      let alone = 0, crossed = 0;
+      if (cond === 'unaccompanied') {
+        const people = a.comp.map(c => c.box), radius = +a.rule.companion_radius || 3;
+        for (const t of conf) {
+          const was = t.alone; t.alone = isAlone(t.box, people, radius);
+          if (t.alone) { t.aloneFrames++; alone++; if (was) t.aloneSec += Math.min(ts - t.prev, g.tracker.maxAge); }
+        }
+      }
+      if (a.line) {
+        const line = a.line.map(p => [p[0] * w, p[1] * h]), want = a.rule.line_direction || 'both';
+        for (const t of conf) {
+          const way = crossing(t.lastFoot, t.foot, line[0], line[1]); if (!way) continue;
+          const d = way > 0 ? 'in' : 'out'; t[d === 'in' ? 'nIn' : 'nOut'] = (t[d === 'in' ? 'nIn' : 'nOut'] || 0) + 1; a[d === 'in' ? 'n_in' : 'n_out']++; t.flash = ts;
+          if (want === 'both' || want === d) { crossed++; a.dir = d; }
+          S.crossings = S.crossings || []; S.crossings.push({ project_id: this.cam.project_id, camera_id: this.id, analytics_id: a.row.id, track_id: t.id, label: t.label, ts, direction: d });
+          if (S.crossings.length > 5000) S.crossings = S.crossings.slice(-5000);
+        }
+      }
+      if (cond === 'group') {
+        const sizes = groupSizes(conf.map(t => t.box), +a.rule.group_radius || 2);   // boxes seen in this frame only
+        conf.forEach((t, i) => { t.groupNow = sizes[i]; t.group = Math.max(t.group, sizes[i]); });
+        a.group_now = sizes.length ? Math.max(...sizes) : 0;
+      }
+      const hold = +a.rule.min_seconds || 0;
+      a.still_longest = shown.reduce((m, t) => Math.max(m, t.stillSec || 0), 0);
+      a.still_now = cond === 'still' ? shown.filter(t => (t.stillSec || 0) >= hold).length : 0;
+      const mark = (d, t) => {
+        if (!t) return;
+        if (cond === 'group') { const n = t.groupNow || 1; d.flag = n >= Math.max(2, +a.rule.count || 2); d.note = n > 1 ? ' group of ' + n : ''; }
+        else if (cond === 'still') { const sec = t.stillSec || 0; d.flag = sec >= hold; d.note = sec >= 2 ? ` still ${Math.round(sec)}s` : ''; }
+        if (a.line && ts - (t.flash ?? -9) < 1) { d.flag = true; d.note = (d.note || '') + ' crossed'; }
+      };
+      const byId = new Map(conf.map(t => [t.id, t])), un = cond === 'unaccompanied';
+      a.dets = g.dets.map(x => { const d = { ...x }, t = byId.get(d.track_id); d.confirmed = !!t; d.alone = !!(t && t.alone && un); mark(d, t); return d; });
+      a.coast = coast.map(t => { const d = { label: t.label, conf: t.conf, box: t.box, track_id: t.id, confirmed: true, alone: t.alone && un }; mark(d, t); return d; });
+      a.tracks_now = shown.length; a.alone_now = alone + (un ? coast.filter(t => t.alone).length : 0);
+      return crossed;
+    }
+    heatFor(ts) {                                                  // { label: cells } per camera and day
       S.heat = S.heat || {}; const cam = S.heat[this.id] = S.heat[this.id] || {}, k = dayKey(ts);
-      if (!cam[k]) { cam[k] = new Array(HEAT_W * HEAT_H).fill(0); const keys = Object.keys(cam).sort(); while (keys.length > 31) delete cam[keys.shift()]; }
+      if (Array.isArray(cam[k])) cam[k] = { '': cam[k] };             // saved before heat was kept per class: counts for all classes only
+      if (!cam[k]) { cam[k] = {}; const keys = Object.keys(cam).sort(); while (keys.length > 31) delete cam[keys.shift()]; }
       return cam[k];
     }
-    endTracks(a, ended) {
-      if (!ended.length) return;
+    endTracks(g, ended) {
+      if (!ended || !ended.length) return;
       S.sightings = S.sightings || [];
-      const hold = Math.max(1, +a.rule.min_seconds || 0);
+      const lone = g.members.find(a => a.rule.condition === 'unaccompanied'), hold = Math.max(1, +(lone ? lone.rule.min_seconds : 0) || 0);
       for (const t of ended) {
         const share = t.aloneFrames / Math.max(1, t.seen), pts = t.pts.length ? t.pts : [[0.5, 0.5]];
-        S.sightings.push({ id: nid('s'), project_id: this.cam.project_id, camera_id: this.id, analytics_id: a.row.id, track_id: t.id, label: t.label,
+        S.sightings.push({ id: nid('s'), project_id: this.cam.project_id, camera_id: this.id, analytics_id: g.members[0].row.id, track_id: t.id, label: t.label,
           first_ts: t.first, last_ts: t.last, duration: Math.round((t.last - t.first) * 10) / 10, alone_share: Math.round(share * 100) / 100, alone_seconds: Math.round(t.aloneSec * 10) / 10,
-          unaccompanied: a.rule.condition === 'unaccompanied' && (t.aloneSec >= hold || share >= 0.5) ? 1 : 0, group_max: t.group,
+          unaccompanied: lone && (t.aloneSec >= hold || share >= 0.5) ? 1 : 0, group_max: t.group,
+          crossed_in: t.nIn || 0, crossed_out: t.nOut || 0, still_max: Math.round((t.stillMax || 0) * 10) / 10,
           cx: +(pts.reduce((s, p) => s + p[0], 0) / pts.length).toFixed(4), cy: +(pts.reduce((s, p) => s + p[1], 0) / pts.length).toFixed(4), conf: t.conf });
       }
       if (S.sightings.length > 3000) S.sightings = S.sightings.slice(-3000);
@@ -494,20 +605,39 @@
     draw(w, h) {
       this.out.width = w; this.out.height = h; const g = this.out.getContext('2d'); g.drawImage(this.work, 0, 0);
       g.lineWidth = 2; g.font = '13px system-ui';
+      const marks = new Map();
       for (const a of this.analytics) {
         const roi = a.row.roi;
         if (roi && roi.length >= 3) {
           g.beginPath(); roi.forEach((p, i) => i ? g.lineTo(p[0] * w, p[1] * h) : g.moveTo(p[0] * w, p[1] * h)); g.closePath();
           g.globalAlpha = 0.12; g.fillStyle = a.color; g.fill(); g.globalAlpha = 1; g.strokeStyle = a.color; g.stroke();
         }
+        if (a.line) {
+          const [[ax, ay], [bx, by]] = a.line.map(p => [p[0] * w, p[1] * h]), mx = (ax + bx) / 2, my = (ay + by) / 2, n = Math.max(1, Math.hypot(bx - ax, by - ay));
+          const tx = mx - (by - ay) / n * 28, ty = my + (bx - ax) / n * 28;   // arrow towards the "in" side
+          g.lineWidth = 3; g.strokeStyle = a.color; g.beginPath(); g.moveTo(ax, ay); g.lineTo(bx, by); g.stroke();
+          g.lineWidth = 2; g.beginPath(); g.moveTo(mx, my); g.lineTo(tx, ty); g.stroke();
+          const ang = Math.atan2(ty - my, tx - mx); g.beginPath(); g.moveTo(tx, ty); g.lineTo(tx - 9 * Math.cos(ang - 0.5), ty - 9 * Math.sin(ang - 0.5)); g.lineTo(tx - 9 * Math.cos(ang + 0.5), ty - 9 * Math.sin(ang + 0.5)); g.closePath(); g.fillStyle = a.color; g.fill();
+          const lt = `in ${a.n_in}  out ${a.n_out}`; g.font = 'bold 13px system-ui'; g.lineWidth = 3; g.strokeStyle = '#000'; g.strokeText(lt, tx + 6, ty + 5); g.fillStyle = '#fff'; g.fillText(lt, tx + 6, ty + 5);
+          g.font = '13px system-ui'; g.lineWidth = 2;
+        }
         const unacc = a.rule.condition === 'unaccompanied';
-        for (const d of [...a.dets, ...(a.coast || [])]) {
-          const color = unacc && d.confirmed ? (d.alone ? '#eb3c3c' : '#3c8cfa') : a.color;
-          const [x1, y1, x2, y2] = d.box; g.strokeStyle = color; g.strokeRect(x1, y1, x2 - x1, y2 - y1);
-          const text = `${d.label}${d.confirmed ? ' #' + d.track_id : ''}${unacc && d.confirmed ? (d.alone ? ' alone' : ' with person') : ''}`, tw = g.measureText(text).width;
-          g.fillStyle = color; g.fillRect(x1, Math.max(0, y1 - 18), tw + 8, 18); g.fillStyle = '#0d1115'; g.fillText(text, x1 + 4, Math.max(13, y1 - 5));
+        for (const d of [...a.dets, ...(a.coast || [])]) {       // analytics on the same model see the same box: draw it once
+          const key = d.box.map(v => Math.round(v / 4)).join(','), m = marks.get(key) || { box: d.box, label: d.label, id: null, notes: [], color: a.color, prio: 0 };
+          if (m.id === null && d.confirmed) m.id = d.track_id;
+          const note = (unacc && d.confirmed ? (d.alone ? ' alone' : ' with person') : '') + (d.note || '');
+          if (note && !m.notes.includes(note)) m.notes.push(note);
+          const prio = (unacc && d.confirmed && d.alone) || d.flag ? 2 : unacc && d.confirmed ? 1 : 0;
+          if (prio > m.prio) { m.prio = prio; m.color = prio === 2 ? '#eb3c3c' : '#3c8cfa'; }
+          marks.set(key, m);
         }
         if (a.loading) { g.fillStyle = 'rgba(0,0,0,.6)'; g.fillRect(0, 0, w, 24); g.fillStyle = '#fff'; g.fillText('Loading the detector (first time only)...', 8, 16); }
+      }
+      g.lineWidth = 2; g.font = '13px system-ui';
+      for (const m of marks.values()) {
+        const [x1, y1, x2, y2] = m.box; g.strokeStyle = m.color; g.strokeRect(x1, y1, x2 - x1, y2 - y1);
+        const text = `${m.label}${m.id !== null ? ' #' + m.id : ''}${m.notes.join(',')}`, tw = g.measureText(text).width;
+        g.fillStyle = m.color; g.fillRect(x1, Math.max(0, y1 - 18), tw + 8, 18); g.fillStyle = '#0d1115'; g.fillText(text, x1 + 4, Math.max(13, y1 - 5));
       }
       g.fillStyle = '#fff'; g.font = '12px system-ui'; g.fillText(new Date().toLocaleString(), 8, h - 8);
     }
@@ -523,7 +653,7 @@
     public() {
       return { id: this.id, status: this.status, message: this.message, fps_in: +this.fps_in.toFixed(1), fps_out: +this.fps_out.toFixed(1), size: this.size,
         analytics: this.analytics.map(a => ({ id: a.row.id, name: a.row.name, count: a.count, infer_ms: +a.infer_ms.toFixed(1), total: a.total, labels: a.labels, error: a.error,
-          tracks_now: a.tracks_now, alone_now: a.alone_now, unique: a.unique, history: a.history.map(h => [+(h[0] % 100000).toFixed(1), h[1], +h[2].toFixed(1)]) })) };
+          tracks_now: a.tracks_now, alone_now: a.alone_now, unique: a.trk ? a.trk.unique : 0, n_in: a.n_in, n_out: a.n_out, group_now: a.group_now, still_now: a.still_now, still_longest: +a.still_longest.toFixed(1), history: a.history.map(h => [+(h[0] % 100000).toFixed(1), h[1], +h[2].toFixed(1)]) })) };
     }
   }
 
@@ -577,7 +707,7 @@
   });
   R('PUT', '/cameras/(\\d+)', (m, o) => { const c = find(S.cameras, +m[1]); if (!c) throw err('Camera not found', 404); Object.assign(c, { name: o.json.name.trim(), fps_limit: +o.json.fps_limit || 5 }); if (o.json.file) { FILES[c.id] = o.json.file; c.source = o.json.file.name; } if (c.source_type === 'rtsp' || c.source_type === 'url') c.source = o.json.source.trim(); save(); if (runners[c.id]) startRunner(c.id); return cameraView(c); });
   function delCamera(id) { stopRunner(id); delete FILES[id]; S.analytics = S.analytics.filter(a => a.camera_id !== id); S.alerts = S.alerts.filter(a => a.camera_id !== id);
-    S.sightings = (S.sightings || []).filter(x => x.camera_id !== id); if (S.heat) delete S.heat[id]; delete stills[id]; saveStills(); S.cameras = S.cameras.filter(c => c.id !== id); }
+    S.sightings = (S.sightings || []).filter(x => x.camera_id !== id); S.crossings = (S.crossings || []).filter(x => x.camera_id !== id); if (S.heat) delete S.heat[id]; delete stills[id]; saveStills(); S.cameras = S.cameras.filter(c => c.id !== id); }
   R('DELETE', '/cameras/(\\d+)', m => { delCamera(+m[1]); save(); return { ok: true }; });
   R('POST', '/cameras/(\\d+)/start', m => { if (!startRunner(+m[1])) throw err('Camera not found', 404); return cameraView(find(S.cameras, +m[1])); });
   R('POST', '/cameras/(\\d+)/stop', m => { stopRunner(+m[1]); return cameraView(find(S.cameras, +m[1])); });
@@ -630,38 +760,61 @@
 
   /* ---------- insights (port of the server endpoints) ---------- */
   const since = days => Date.now() / 1000 - Math.max(0.01, +days || 7) * 86400;
-  function insights(pid, days) {
-    const rows = (S.sightings || []).filter(r => r.project_id === pid && r.first_ts >= since(days));
+  const byLabel = label => r => !label || (r.label || '').toLowerCase() === label;
+  function insights(pid, days, label) {
+    label = (label || '').trim().toLowerCase();
+    const all = (S.sightings || []).filter(r => r.project_id === pid && r.first_ts >= since(days)), rows = all.filter(byLabel(label));
+    const labels = [...new Set(all.map(r => (r.label || '').toLowerCase()).filter(Boolean))].sort();
     const byHour = new Array(24).fill(0), byDay = {}, perCam = {};
+    const camOf = id => perCam[id] = perCam[id] || { camera_id: id, name: (find(S.cameras, id) || {}).name || 'Camera removed', sightings: 0, unaccompanied: 0, dwell: 0, group_max: 0, crossed_in: 0, crossed_out: 0 };
     for (const r of rows) {
       const d = new Date(r.first_ts * 1000); byHour[d.getHours()]++;
       const k = dayKey(r.first_ts), e = byDay[k] = byDay[k] || { date: k, sightings: 0, unaccompanied: 0 }; e.sightings++; e.unaccompanied += r.unaccompanied;
-      const c = perCam[r.camera_id] = perCam[r.camera_id] || { camera_id: r.camera_id, name: (find(S.cameras, r.camera_id) || {}).name || 'Camera removed', sightings: 0, unaccompanied: 0, dwell: 0, group_max: 0 };
+      const c = camOf(r.camera_id);
       c.sightings++; c.unaccompanied += r.unaccompanied; c.dwell += r.duration || 0; c.group_max = Math.max(c.group_max, r.group_max || 1);
     }
+    const cin = new Array(24).fill(0), cout = new Array(24).fill(0);
+    (S.crossings || []).filter(x => x.project_id === pid && x.ts >= since(days)).filter(byLabel(label)).forEach(x => {
+      const hr = new Date(x.ts * 1000).getHours(), c = camOf(x.camera_id);
+      if (x.direction === 'in') { cin[hr]++; c.crossed_in++; } else { cout[hr]++; c.crossed_out++; }
+    });
     Object.values(perCam).forEach(c => { c.avg_dwell = Math.round(c.dwell / Math.max(1, c.sightings) * 10) / 10; delete c.dwell; });
     const n = rows.length;
-    return { days, totals: { sightings: n, unaccompanied: rows.reduce((s, r) => s + r.unaccompanied, 0), avg_dwell: Math.round(rows.reduce((s, r) => s + (r.duration || 0), 0) / Math.max(1, n) * 10) / 10,
-        group_max: rows.reduce((m, r) => Math.max(m, r.group_max || 1), 0), busiest_hour: n ? byHour.indexOf(Math.max(...byHour)) : null },
-      by_hour: byHour, by_day: Object.keys(byDay).sort().map(k => byDay[k]), cameras: Object.values(perCam).sort((a, b) => b.sightings - a.sightings) };
+    return { days, label, labels, totals: { sightings: n, unaccompanied: rows.reduce((s, r) => s + r.unaccompanied, 0), avg_dwell: Math.round(rows.reduce((s, r) => s + (r.duration || 0), 0) / Math.max(1, n) * 10) / 10,
+        group_max: rows.reduce((m, r) => Math.max(m, r.group_max || 1), 0), still_max: rows.reduce((m, r) => Math.max(m, r.still_max || 0), 0),
+        crossed_in: cin.reduce((s, v) => s + v, 0), crossed_out: cout.reduce((s, v) => s + v, 0), busiest_hour: n ? byHour.indexOf(Math.max(...byHour)) : null },
+      by_hour: byHour, crossings_by_hour: { in: cin, out: cout }, by_day: Object.keys(byDay).sort().map(k => byDay[k]), cameras: Object.values(perCam).sort((a, b) => b.sightings - a.sightings) };
   }
-  const sightingsOf = (pid, days, limit) => (S.sightings || []).filter(r => r.project_id === pid && r.first_ts >= since(days)).slice().reverse().slice(0, limit || 200)
+  const sightingsOf = (pid, days, limit, label) => (S.sightings || []).filter(r => r.project_id === pid && r.first_ts >= since(days)).filter(byLabel((label || '').toLowerCase())).slice().reverse().slice(0, limit || 200)
     .map(r => ({ ...r, camera_name: (find(S.cameras, r.camera_id) || {}).name }));
-  R('GET', '/projects/(\\d+)/insights', (m, o) => insights(+m[1], +o.query.days || 7));
-  R('GET', '/projects/(\\d+)/sightings', (m, o) => sightingsOf(+m[1], +o.query.days || 7, +o.query.limit || 200));
+  R('GET', '/projects/(\\d+)/insights', (m, o) => insights(+m[1], +o.query.days || 7, o.query.label));
+  R('GET', '/projects/(\\d+)/sightings', (m, o) => sightingsOf(+m[1], +o.query.days || 7, +o.query.limit || 200, o.query.label));
   R('DELETE', '/projects/(\\d+)/insights', m => { const cams = S.cameras.filter(c => c.project_id === +m[1]).map(c => c.id);
-    S.sightings = (S.sightings || []).filter(r => r.project_id !== +m[1]); cams.forEach(id => { if (S.heat) delete S.heat[id]; }); save(); return { ok: true }; });
+    S.sightings = (S.sightings || []).filter(r => r.project_id !== +m[1]); S.crossings = (S.crossings || []).filter(r => r.project_id !== +m[1]); cams.forEach(id => { if (S.heat) delete S.heat[id]; }); save(); return { ok: true }; });
   R('GET', '/cameras/(\\d+)/heatmap', (m, o) => {
+    const label = (o.query.label || '').trim().toLowerCase();
     const grid = new Array(HEAT_W * HEAT_H).fill(0), from = dayKey(since(+o.query.days || 7)), cam = (S.heat || {})[+m[1]] || {};
-    Object.keys(cam).forEach(k => { if (k >= from) cam[k].forEach((v, i) => grid[i] += v); });
-    return { w: HEAT_W, h: HEAT_H, grid, max: Math.max(0, ...grid) };
+    Object.keys(cam).forEach(k => {
+      if (k < from) return;
+      const day = Array.isArray(cam[k]) ? { '': cam[k] } : cam[k];      // saved before heat was kept per class
+      Object.keys(day).forEach(lab => { if (!label || lab === label) day[lab].forEach((v, i) => grid[i] += v); });
+    });
+    return { w: HEAT_W, h: HEAT_H, grid, max: Math.max(0, ...grid), label };
   });
-  function csv(pid, days) {
-    const esc = v => /[",\n]/.test(String(v)) ? '"' + String(v).replace(/"/g, '""') + '"' : String(v);
-    const head = ['camera', 'label', 'track_id', 'first_seen', 'last_seen', 'duration_s', 'unaccompanied', 'seconds_alone', 'share_of_time_alone', 'largest_group', 'x_in_frame', 'y_in_frame', 'confidence'];
-    const lines = sightingsOf(pid, days, 100000).map(r => [r.camera_name, r.label, r.track_id, new Date(r.first_ts * 1000).toISOString(), new Date(r.last_ts * 1000).toISOString(), r.duration,
-      r.unaccompanied ? 'yes' : 'no', r.alone_seconds, r.alone_share, r.group_max, r.cx, r.cy, r.conf].map(esc).join(','));
-    return URL.createObjectURL(new Blob([[head.join(','), ...lines].join('\n')], { type: 'text/csv' }));
+  const esc = v => /[",\n]/.test(String(v)) ? '"' + String(v).replace(/"/g, '""') + '"' : String(v);
+  const blob = rows => URL.createObjectURL(new Blob([rows.map(r => r.map(esc).join(',')).join('\n')], { type: 'text/csv' }));
+  function csv(pid, days, label) {
+    const head = ['camera', 'label', 'track_id', 'first_seen', 'last_seen', 'duration_s', 'unaccompanied', 'seconds_alone', 'share_of_time_alone', 'largest_group', 'longest_still_s', 'crossed_in', 'crossed_out', 'x_in_frame', 'y_in_frame', 'confidence'];
+    return blob([head, ...sightingsOf(pid, days, 100000, label).map(r => [r.camera_name, r.label, r.track_id, new Date(r.first_ts * 1000).toISOString(), new Date(r.last_ts * 1000).toISOString(), r.duration,
+      r.unaccompanied ? 'yes' : 'no', r.alone_seconds, r.alone_share, r.group_max, r.still_max || 0, r.crossed_in || 0, r.crossed_out || 0, r.cx, r.cy, r.conf])]);
+  }
+  function csvCross(pid, days, label) {                         // line crossings per hour, camera and label
+    const per = new Map(), pad = n => String(n).padStart(2, '0');
+    (S.crossings || []).filter(x => x.project_id === pid && x.ts >= since(days)).filter(byLabel((label || '').toLowerCase())).sort((a, b) => a.ts - b.ts).forEach(x => {
+      const d = new Date(x.ts * 1000), hour = `${dayKey(x.ts)} ${pad(d.getHours())}:00`, cam = (find(S.cameras, x.camera_id) || {}).name || 'Camera removed', k = [hour, cam, x.label].join('|');
+      const e = per.get(k) || { hour, cam, label: x.label, in: 0, out: 0 }; e[x.direction]++; per.set(k, e);
+    });
+    return blob([['hour', 'camera', 'label', 'in', 'out'], ...[...per.values()].map(e => [e.hour, e.cam, e.label, e.in, e.out])]);
   }
 
   async function call(method, path, o = {}) {
@@ -682,6 +835,7 @@
   requestAnimationFrame(paint);
 
   addPresets();
+  addDogExtras();
   S.cameras.forEach(c => { if (c.enabled && c.source_type !== 'file' && c.source_type !== 'webcam') startRunner(c.id); });
   window.DemoBackend = {
     call,
@@ -689,6 +843,7 @@
     alertImg: id => (find(S.alerts, id) || {}).snapshot || '',
     still: id => (runners[id] && runners[id].raw) || stills[id] || 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360"><rect width="640" height="360" fill="#12181e"/><text x="320" y="186" fill="#b8c4cc" font-family="sans-serif" font-size="20" text-anchor="middle">Start the camera to see its picture</text></svg>'),
     csv,
+    csvCross,
     reset: () => { localStorage.removeItem(KEY); location.reload(); }
   };
 })();

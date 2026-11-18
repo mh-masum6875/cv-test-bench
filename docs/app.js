@@ -93,7 +93,9 @@ async function pageProjects() {
       ${ps.some(p => p.cameras) ? `<div class="card start"><h3>Run the example</h3><p class="muted small">Starts an example camera with live detection, tracking, zones and alerts on sample footage.</p>
         <button class="btn primary" data-act="quick-demo">Start live demo</button></div>` : ''}</div>`
       : ps.some(p => p.cameras) ? `<div class="card quick"><div><h3>See it working in one click</h3><p class="muted small">Starts an example camera with live detection, zones and alerts.</p></div>
-      <button class="btn primary" data-act="quick-demo">Start live demo</button></div>` : ''}
+      <div class="row"><button class="btn" data-act="add-examples">Add example projects</button><button class="btn primary" data-act="quick-demo">Start live demo</button></div></div>`
+      : `<div class="card quick"><div><h3>Start from the examples</h3><p class="muted small">Adds the stray dog, traffic, safety and counting projects with their sample clips.</p></div>
+      <button class="btn primary" data-act="add-examples">Add example projects</button></div>`}
     ${ps.length ? `<div class="grid">${ps.map(p => `<a class="card pcard" href="#/p/${p.id}">
       <h3>${esc(p.name)}</h3><div class="muted small">${esc(p.description) || 'No description'}</div>
       <div class="nums"><div><b>${p.cameras}</b><span class="muted small">cameras</span></div>
@@ -267,25 +269,32 @@ async function renderAlerts(filter, full) {
 }
 
 /* ---------------------------------------------------------- insights (sightings, hotspots, trends) */
-let insightsDays = 7;
+let insightsDays = 7, insightsLabel = '';
 const fmtDur = s => s >= 60 ? `${Math.floor(s / 60)}m ${Math.round(s % 60)}s` : `${Math.round(s)}s`;
 const hourLabel = h => h === null || h === undefined ? '-' : `${String(h).padStart(2, '0')}:00`;
 
 async function renderInsights(pid, refresh = false) {
   const el = $('#tab'); if (!el) return;
-  const [ins, rows, cams] = await Promise.all([api(`/projects/${pid}/insights?days=${insightsDays}`), api(`/projects/${pid}/sightings?days=${insightsDays}&limit=100`), api(`/projects/${pid}/cameras`)]);
+  const lq = insightsLabel ? `&label=${encodeURIComponent(insightsLabel)}` : '';
+  const [ins, rows, cams] = await Promise.all([api(`/projects/${pid}/insights?days=${insightsDays}${lq}`), api(`/projects/${pid}/sightings?days=${insightsDays}&limit=100${lq}`), api(`/projects/${pid}/cameras`)]);
   if (!$('#tab')) return;
-  const t = ins.totals;
+  const t = ins.totals, crossed = (t.crossed_in || 0) + (t.crossed_out || 0);
+  const labels = [...new Set([...(ins.labels || []), ...(insightsLabel ? [insightsLabel] : [])])];
   const ranges = [[1, 'Last 24 hours'], [7, 'Last 7 days'], [30, 'Last 30 days']];
   const scroll = window.scrollY;
   el.innerHTML = `
     <div class="row" style="margin-bottom:14px;flex-wrap:wrap"><div class="seg">${ranges.map(([d, l]) => `<button data-act="ins-range" data-days="${d}" class="${insightsDays === d ? 'on' : ''}">${l}</button>`).join('')}</div>
-      <span class="grow"></span><a class="btn small" ${MODE === 'demo' ? `href="${window.DemoBackend.csv(pid, insightsDays)}" download="sightings_project${pid}.csv"` : `href="api/projects/${pid}/sightings.csv?days=${insightsDays}"`}>Download CSV</a><button class="btn small danger" data-act="ins-clear">Clear data</button></div>
+      <label class="small muted" style="display:flex;gap:6px;align-items:center">Class <select id="ins-label"><option value="">All classes</option>${labels.map(l => `<option ${l === insightsLabel ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
+      <span class="grow"></span><a class="btn small" ${MODE === 'demo' ? `href="${window.DemoBackend.csv(pid, insightsDays, insightsLabel)}" download="sightings_project${pid}.csv"` : `href="api/projects/${pid}/sightings.csv?days=${insightsDays}${lq}"`}>Download CSV</a>
+      ${crossed ? `<a class="btn small" ${MODE === 'demo' ? `href="${window.DemoBackend.csvCross(pid, insightsDays, insightsLabel)}" download="crossings_project${pid}.csv"` : `href="api/projects/${pid}/crossings.csv?days=${insightsDays}${lq}"`}>Crossings CSV</a>` : ''}
+      <button class="btn small danger" data-act="ins-clear">Clear data</button></div>
     <div class="stats">
       <div class="stat"><b>${t.sightings}</b><span>sightings (tracked visits)</span></div>
       <div class="stat"><b style="color:${t.unaccompanied ? 'var(--crit)' : 'inherit'}">${t.unaccompanied}</b><span>unaccompanied</span></div>
       <div class="stat"><b>${fmtDur(t.avg_dwell)}</b><span>average time in view</span></div>
       <div class="stat"><b>${t.group_max}</b><span>largest group seen together</span></div>
+      ${t.still_max >= 5 ? `<div class="stat"><b>${fmtDur(t.still_max)}</b><span>longest time not moving</span></div>` : ''}
+      ${crossed ? `<div class="stat"><b>${t.crossed_in} / ${t.crossed_out}</b><span>line crossings in / out</span></div>` : ''}
       <div class="stat"><b>${hourLabel(t.busiest_hour)}</b><span>busiest hour</span></div></div>
     ${MODE === 'demo' ? `<div class="muted small" style="margin:-8px 0 14px">This data is kept in your browser only. The sample videos loop, so every loop adds new sightings.</div>` : ''}
     ${t.sightings ? '' : `<div class="card muted small" style="margin-bottom:16px">No sightings in this period yet. A sighting is saved when a tracked object leaves the view or the camera stops.
@@ -295,13 +304,15 @@ async function renderInsights(pid, refresh = false) {
       <div class="card"><h3 style="margin-top:0">By day</h3><canvas id="ins-day" width="640" height="220" class="chart"></canvas>
         <div class="muted small"><span class="key" style="background:#5b6b78"></span>all sightings <span class="key" style="background:var(--crit);margin-left:10px"></span>unaccompanied</div></div>
     </div>
+    ${crossed ? `<div class="card" style="margin-top:16px"><h3 style="margin-top:0">Line crossings by hour of day</h3><canvas id="ins-cross" width="640" height="220" class="chart"></canvas>
+      <div class="muted small"><span class="key" style="background:#5b6b78"></span>in <span class="key" style="background:#fbbf24;margin-left:10px"></span>out</div></div>` : ''}
     <h2 style="margin:22px 0 10px">Hotspots by camera</h2>
-    <div class="muted small" style="margin:-4px 0 12px">Brighter areas are where tracked objects spent the most time (their foot position), over the selected period.</div>
+    <div class="muted small" style="margin:-4px 0 12px">Brighter areas are where ${insightsLabel ? `a ${esc(insightsLabel)}` : 'tracked objects'} spent the most time (foot position), over the selected period.</div>
     <div class="grid heatgrid">${cams.map(c => {
       const s = ins.cameras.find(x => x.camera_id === c.id) || { sightings: 0, unaccompanied: 0, avg_dwell: 0, group_max: 0 };
       return `<div class="card heatcard"><div class="heatwrap"><img src="${MODE === 'demo' ? window.DemoBackend.still(c.id) : `api/cameras/${c.id}/still.jpg?t=${refresh ? Date.now() : 0}`}" alt="${esc(c.name)}"><canvas data-heat="${c.id}"></canvas></div>
         <div class="row" style="margin-top:10px"><a href="#/c/${c.id}"><b>${esc(c.name)}</b></a><span class="grow"></span>${chip(c.runtime.status)}</div>
-        <div class="kv"><span>Sightings <b>${s.sightings}</b></span><span>Unaccompanied <b>${s.unaccompanied}</b></span><span>Avg time <b>${fmtDur(s.avg_dwell)}</b></span><span>Largest group <b>${s.group_max}</b></span></div></div>`;
+        <div class="kv"><span>Sightings <b>${s.sightings}</b></span><span>Unaccompanied <b>${s.unaccompanied}</b></span><span>Avg time <b>${fmtDur(s.avg_dwell)}</b></span><span>Largest group <b>${s.group_max}</b></span>${s.crossed_in || s.crossed_out ? `<span>Crossed in / out <b>${s.crossed_in} / ${s.crossed_out}</b></span>` : ''}</div></div>`;
     }).join('') || '<div class="muted">No cameras in this project.</div>'}</div>
     <h2 style="margin:22px 0 10px">Recent sightings</h2>
     ${rows.length ? `<div class="card tablewrap"><table><tr><th>Seen</th><th>Camera</th><th>Object</th><th>Time in view</th><th>Time alone</th><th>Group</th><th>Status</th></tr>
@@ -312,9 +323,11 @@ async function renderInsights(pid, refresh = false) {
   window.scrollTo(0, scroll);
   bars($('#ins-hour'), ins.by_hour.map((v, h) => ({ label: h % 3 === 0 ? String(h).padStart(2, '0') : '', a: v })));
   bars($('#ins-day'), ins.by_day.map(d => ({ label: d.date.slice(5), a: d.sightings, b: d.unaccompanied })));
+  if (crossed) bars($('#ins-cross'), ins.crossings_by_hour.in.map((v, h) => ({ label: h % 2 === 0 ? String(h).padStart(2, '0') : '', a: v, b: ins.crossings_by_hour.out[h], side: true })));
+  $('#ins-label').onchange = e => { insightsLabel = e.target.value; renderInsights(pid); };
   for (const c of cams) {
     const cv = el.querySelector(`canvas[data-heat="${c.id}"]`); if (!cv) continue;
-    api(`/cameras/${c.id}/heatmap?days=${insightsDays}`).then(h => drawHeat(cv, h)).catch(() => { });
+    api(`/cameras/${c.id}/heatmap?days=${insightsDays}${lq}`).then(h => drawHeat(cv, h)).catch(() => { });
   }
 }
 
@@ -323,11 +336,18 @@ function bars(cv, data) {
   const g = cv.getContext('2d'), W = cv.width, H = cv.height, padB = 26, padT = 24;
   g.clearRect(0, 0, W, H);
   if (!data.length) { g.fillStyle = '#8fa1ae'; g.font = '16px system-ui'; g.fillText('No data yet', 10, H / 2); return; }
-  const max = Math.max(1, ...data.map(d => d.a)), bw = W / data.length;
+  const max = Math.max(1, ...data.map(d => d.side ? Math.max(d.a, d.b || 0) : d.a)), bw = W / data.length;
   g.strokeStyle = '#243340'; g.beginPath(); g.moveTo(0, H - padB + .5); g.lineTo(W, H - padB + .5); g.stroke();
   g.font = '13px system-ui'; g.textAlign = 'center';
   data.forEach((d, i) => {
     const w = Math.min(bw * 0.7, 56), x = i * bw + (bw - w) / 2, hA = (d.a / max) * (H - padB - padT);
+    if (d.side) {                                       // two bars next to each other, for example in and out
+      const half = w / 2, hB = ((d.b || 0) / max) * (H - padB - padT);
+      g.fillStyle = '#5b6b78'; g.fillRect(x, H - padB - hA, half - 1, hA);
+      g.fillStyle = '#fbbf24'; g.fillRect(x + half, H - padB - hB, half - 1, hB);
+      if (d.label) { g.fillStyle = '#8fa1ae'; g.fillText(d.label, x + w / 2, H - 8); }
+      return;
+    }
     g.fillStyle = '#5b6b78'; g.fillRect(x, H - padB - hA, w, hA);
     if (d.b) { const hB = (d.b / max) * (H - padB - padT); g.fillStyle = '#f87171'; g.fillRect(x, H - padB - hB, w, hB); }
     if (d.a && bw > 18) { g.fillStyle = '#e8eef2'; g.fillText(d.a, x + w / 2, H - padB - hA - 6); }
@@ -398,23 +418,38 @@ async function pageCamera(cid) {
   await tick(); timer = setInterval(() => tick().catch(() => { }), 2000);
 }
 
+const WAY = { both: 'either way', in: 'going in', out: 'going out' };
 function ruleText(r) {
-  const cond = r.condition === 'absent' ? 'nothing detected'
-    : r.condition === 'unaccompanied' ? `${r.count}+ unaccompanied (no ${(r.companions || ['person']).join('/')} within ${r.companion_radius}x its height)`
+  const c = r.condition;
+  const cond = c === 'absent' ? 'nothing detected'
+    : c === 'unaccompanied' ? `${r.count}+ unaccompanied (no ${(r.companions || ['person']).join('/')} within ${r.companion_radius}x its height)`
+    : c === 'group' ? `${r.count}+ together (within ${r.group_radius ?? 2}x their height)`
+    : c === 'still' ? `an object has not moved`
+    : c === 'crossing' ? `an object crosses the line ${WAY[r.line_direction] || WAY.both}`
     : `${r.count}+ object${r.count > 1 ? 's' : ''}`;
-  return `<span>Alert when <b>${cond}</b> for <b>${r.min_seconds}s</b></span><span>Cooldown <b>${r.cooldown_seconds}s</b></span>
+  const hold = c === 'crossing' ? '' : ` for <b>${r.min_seconds}s</b>`;
+  return `<span>Alert when <b>${cond}</b>${hold}</span><span>Cooldown <b>${r.cooldown_seconds}s</b></span>
     <span>Severity <b>${r.severity}</b></span><span><b>${r.start} to ${r.end}</b>, ${r.days.length === 7 ? 'every day' : r.days.map(d => DAYS[d]).join(' ')}</span>`;
 }
+const TRACKED = ['unaccompanied', 'group', 'still', 'crossing'];   // rules about tracked objects, not a plain count
 function analyticCard(a, rt) {
   const m = models.find(x => x.id === a.model_id);
   return `<div class="an ${a.enabled ? '' : 'off'}"><div class="head"><div><h3>${esc(a.name)}</h3><div class="muted small">${esc(m ? m.name : 'Missing model')} | conf ${a.conf}</div></div>
     <div class="row"><button class="btn small" data-act="edit-an" data-id="${a.id}">Edit</button><button class="btn small danger" data-act="del-an" data-id="${a.id}">Delete</button></div></div>
-    <div class="kv">${a.classes.length ? `<span>Classes <b>${esc(a.classes.join(', '))}</b></span>` : '<span>All classes</span>'}${a.roi.length >= 3 ? '<span>Zone <b>on</b></span>' : '<span>Whole frame</span>'}${a.webhook_url ? '<span>Webhook <b>on</b></span>' : ''}</div>
+    <div class="kv">${a.classes.length ? `<span>Classes <b>${esc(a.classes.join(', '))}</b></span>` : '<span>All classes</span>'}${a.roi.length >= 3 ? '<span>Zone <b>on</b></span>' : '<span>Whole frame</span>'}${(a.rule.line || []).length === 2 ? '<span>Counting line <b>on</b></span>' : ''}${a.webhook_url ? '<span>Webhook <b>on</b></span>' : ''}</div>
     <div class="kv">${ruleText(a.rule)}${a.rule.blur_people ? '<span>Faces <b>blurred</b></span>' : ''}</div>
-    ${rt ? (rt.error ? `<div style="color:var(--crit)" class="small">Model error: ${esc(rt.error)}</div>` : `<div class="row small"><span>${a.rule.condition === 'unaccompanied' ? `In view now: <b style="font-size:1.1rem">${rt.tracks_now ?? 0}</b>` : `Now: <b style="font-size:1.1rem">${rt.count}</b> object${rt.count === 1 ? '' : 's'}`}</span>
+    ${rt ? (rt.error ? `<div style="color:var(--crit)" class="small">Model error: ${esc(rt.error)}</div>` : `<div class="row small"><span>${TRACKED.includes(a.rule.condition) ? `In view now: <b style="font-size:1.1rem">${rt.tracks_now ?? 0}</b>` : `Now: <b style="font-size:1.1rem">${rt.count}</b> object${rt.count === 1 ? '' : 's'}`}</span>
       <span class="muted">${rt.infer_ms} ms / frame</span><span class="muted">${Object.entries(rt.labels).map(([k, v]) => k + ' ' + v).join(', ')}</span></div>
-      ${rt.tracks_now !== undefined ? `<div class="row small">${a.rule.condition === 'unaccompanied' ? '' : `<span>Tracked now <b>${rt.tracks_now}</b></span>`}${a.rule.condition === 'unaccompanied' ? `<span>Unaccompanied <b style="color:${rt.alone_now ? 'var(--crit)' : 'inherit'}">${rt.alone_now}</b></span>` : ''}<span class="muted" title="A dog that is hidden for a few seconds can come back with a new ID, so this can be higher than the number of different dogs">Tracked IDs since start <b>${rt.unique}</b></span></div>` : ''}
+      ${rt.tracks_now !== undefined ? `<div class="row small">${TRACKED.includes(a.rule.condition) ? '' : `<span>Tracked now <b>${rt.tracks_now}</b></span>`}${a.rule.condition === 'unaccompanied' ? `<span>Unaccompanied <b style="color:${rt.alone_now ? 'var(--crit)' : 'inherit'}">${rt.alone_now}</b></span>` : ''}<span class="muted" title="A dog that is hidden for a few seconds can come back with a new ID, so this can be higher than the number of different dogs">Tracked IDs since start <b>${rt.unique}</b></span></div>` : ''}
+      ${liveExtra(a, rt)}
       <canvas class="spark" id="sp${a.id}" width="600" height="112"></canvas>`) : '<div class="muted small">Start the camera to see live numbers.</div>'}</div>`;
+}
+function liveExtra(a, rt) {                       // numbers for the group, still and line analytics
+  const c = a.rule.condition, out = [];
+  if (c === 'group') out.push(`<span>Largest group now <b style="color:${rt.group_now >= a.rule.count ? 'var(--crit)' : 'inherit'}">${rt.group_now ?? 0}</b></span>`);
+  if (c === 'still') out.push(`<span>Not moving for ${a.rule.min_seconds}s or more <b style="color:${rt.still_now ? 'var(--crit)' : 'inherit'}">${rt.still_now ?? 0}</b></span><span>Longest still now <b>${fmtDur(rt.still_longest || 0)}</b></span>`);
+  if ((a.rule.line || []).length === 2) out.push(`<span>Crossed in <b>${rt.n_in ?? 0}</b></span><span>Crossed out <b>${rt.n_out ?? 0}</b></span>`);
+  return out.length ? `<div class="row small">${out.join('')}</div>` : '';
 }
 function spark(cv, hist) {
   const g = cv.getContext('2d'), W = cv.width, H = cv.height; g.clearRect(0, 0, W, H);
@@ -447,27 +482,42 @@ function cameraEditForm(cid) {
 async function analyticForm(cid, a) {
   const isNew = !a;
   a = a || { name: '', model_id: models[0] ? models[0].id : 1, conf: 0.4, classes: [], roi: [], enabled: true, webhook_url: '', rule: await api('/default-rule') };
-  const r = a.rule; let roi = (a.roi || []).map(p => [...p]);
+  const r = a.rule; let roi = (a.roi || []).map(p => [...p]), line = (r.line || []).map(p => [...p]), mode = 'zone';
   openModal(isNew ? 'Add analytic' : 'Edit analytic', `
     <div class="two"><div class="field"><label>Name</label><input id="a-name" value="${esc(a.name)}" placeholder="Person in restricted zone"></div>
     <div class="field"><label>Model</label><select id="a-model">${models.map(m => `<option value="${m.id}" ${m.id === a.model_id ? 'selected' : ''}>${esc(m.name)}${m.exists ? '' : ' (file missing)'}</option>`).join('')}</select></div></div>
     <div class="field"><label>Confidence threshold: <b id="a-conf-v">${a.conf}</b></label><input type="range" id="a-conf" min="0.05" max="0.95" step="0.05" value="${a.conf}"></div>
     <div class="field"><label>Only count these classes (comma separated, empty means all)</label>
       <div class="row"><input id="a-classes" class="grow" value="${esc(a.classes.join(', '))}" placeholder="person, helmet"><button class="btn small" id="a-load">Load from model</button></div><div id="a-cls-hint" class="muted small" style="margin-top:6px"></div></div>
-    <div class="field"><label>Detection zone (optional). Click the picture to add corners, an object counts when its centre is inside.</label>
+    <div class="field"><label>Zone and counting line (both optional). Click the picture to add points.</label>
+      <div class="seg" id="z-mode" style="margin-bottom:8px"><button data-m="zone" class="on">Zone</button><button data-m="line">Counting line</button></div>
+      <div class="muted small" id="z-help" style="margin-bottom:8px"></div>
       <div class="zone" id="zone"><img id="zone-img" src="${MODE === 'demo' ? window.DemoBackend.rawFrame(cid) : `api/cameras/${cid}/snapshot.jpg?raw=true&t=${Date.now()}`}"><canvas id="zone-cv"></canvas></div>
-      <div class="row" style="margin-top:8px"><button class="btn small" id="z-undo">Undo point</button><button class="btn small" id="z-clear">Clear zone</button><span class="muted small" id="z-info"></span></div></div>
+      <div class="row" style="margin-top:8px"><button class="btn small" id="z-undo">Undo point</button><button class="btn small" id="z-clear">Clear</button><span class="muted small" id="z-info"></span></div></div>
     <h3 style="margin:18px 0 10px">Alert rule</h3>
-    <div class="three"><div class="field"><label>Alert when</label><select id="r-cond"><option value="count_gte" ${r.condition === 'count_gte' ? 'selected' : ''}>objects are present</option><option value="absent" ${r.condition === 'absent' ? 'selected' : ''}>nothing is detected</option><option value="unaccompanied" ${r.condition === 'unaccompanied' ? 'selected' : ''}>an object is alone</option></select></div>
-    <div class="field"><label>Number of objects (or more)</label><input id="r-count" type="number" min="1" value="${r.count}"></div>
+    <div class="three"><div class="field"><label>Alert when</label><select id="r-cond">${[['count_gte', 'objects are present'], ['absent', 'nothing is detected'], ['unaccompanied', 'an object is alone'], ['group', 'objects are in a group'], ['still', 'an object stays still'], ['crossing', 'an object crosses the line']]
+      .map(([v, t]) => `<option value="${v}" ${r.condition === v ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
+    <div class="field" id="r-count-f"><label id="r-count-l">Number of objects (or more)</label><input id="r-count" type="number" min="1" value="${r.count}"></div>
     <div class="field"><label>Severity</label><select id="r-sev">${['info', 'warning', 'critical'].map(s => `<option ${r.severity === s ? 'selected' : ''}>${s}</option>`).join('')}</select></div></div>
     <div id="r-unacc" class="${r.condition === 'unaccompanied' ? '' : 'hidden'}">
       <div class="muted small" style="margin:-4px 0 10px">Use this for stray dogs: a dog counts only when no companion (a person) is near it. Put <b>dog</b> in the classes above.</div>
       <div class="two"><div class="field"><label>Companion classes (comma separated)</label><input id="r-comp" value="${esc((r.companions || ['person']).join(', '))}"></div>
       <div class="field"><label>Near means within this many dog-heights</label><input id="r-rad" type="number" min="0.5" max="20" step="0.5" value="${r.companion_radius ?? 3}"></div></div>
     </div>
+    <div id="r-group" class="${r.condition === 'group' ? '' : 'hidden'}">
+      <div class="muted small" style="margin:-4px 0 10px">Alerts when that many objects stand close together, for example a pack of dogs.</div>
+      <div class="field"><label>Close means within this many object-heights of each other</label><input id="r-grad" type="number" min="0.5" max="20" step="0.5" value="${r.group_radius ?? 2}"></div>
+    </div>
+    <div id="r-still" class="${r.condition === 'still' ? '' : 'hidden'}">
+      <div class="muted small" style="margin:-4px 0 10px">Alerts when a tracked object has not moved for the time below, for example a dog lying in the road.</div>
+      <div class="field"><label>Not moving means within this percent of the frame width</label><input id="r-stol" type="number" min="0.5" max="20" step="0.5" value="${r.still_tolerance ?? 3}"></div>
+    </div>
+    <div id="r-line" class="${r.condition === 'crossing' ? '' : 'hidden'}">
+      <div class="muted small" style="margin:-4px 0 10px">Draw the counting line on the picture above. In is the side the arrow points to.</div>
+      <div class="field"><label>Alert on crossings</label><select id="r-dir">${Object.entries(WAY).map(([k, t]) => `<option value="${k}" ${(r.line_direction || 'both') === k ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
+    </div>
     <label style="display:flex;gap:8px;align-items:center;color:var(--ink);margin:-4px 0 14px"><input type="checkbox" id="r-blur" ${r.blur_people ? 'checked' : ''}> Blur the faces of detected people in the live view and alert pictures (privacy)</label>
-    <div class="two"><div class="field"><label>Must hold for (seconds)</label><input id="r-min" type="number" min="0" value="${r.min_seconds}"></div>
+    <div class="two"><div class="field" id="r-min-f"><label id="r-min-l">Must hold for (seconds)</label><input id="r-min" type="number" min="0" value="${r.min_seconds}"></div>
     <div class="field"><label>Wait between alerts (seconds)</label><input id="r-cool" type="number" min="0" value="${r.cooldown_seconds}"></div></div>
     <div class="field"><label>Active on</label><div class="days">${DAYS.map((d, i) => `<label><input type="checkbox" class="r-day" value="${i}" ${r.days.includes(i) ? 'checked' : ''}>${d}</label>`).join('')}</div></div>
     <div class="two"><div class="field"><label>From</label><input id="r-start" type="time" value="${r.start}"></div><div class="field"><label>Until</label><input id="r-end" type="time" value="${r.end}"></div></div>
@@ -478,23 +528,61 @@ async function analyticForm(cid, a) {
   const draw = () => {
     if (!document.body.contains(cv)) return;     // the dialog was closed
     cv.width = img.clientWidth || 640; cv.height = img.clientHeight || 360;
-    const g = cv.getContext('2d'); g.clearRect(0, 0, cv.width, cv.height);
-    $('#z-info').textContent = roi.length ? `${roi.length} point${roi.length === 1 ? '' : 's'}${roi.length < 3 ? ' (need at least 3)' : ''}` : 'No zone, the whole frame is used';
-    if (!roi.length) return;
-    g.beginPath(); roi.forEach((p, i) => i ? g.lineTo(p[0] * cv.width, p[1] * cv.height) : g.moveTo(p[0] * cv.width, p[1] * cv.height));
-    if (roi.length >= 3) { g.closePath(); g.fillStyle = 'rgba(45,212,191,.2)'; g.fill(); }
-    g.strokeStyle = '#2dd4bf'; g.lineWidth = 2.5; g.stroke();
-    roi.forEach(p => { g.beginPath(); g.arc(p[0] * cv.width, p[1] * cv.height, 5, 0, 7); g.fillStyle = '#fff'; g.fill(); });
+    const g = cv.getContext('2d'), W = cv.width, H = cv.height; g.clearRect(0, 0, W, H);
+    $('#z-help').textContent = mode === 'zone' ? 'Click to add corners. An object counts when its centre is inside the zone.'
+      : 'Click two points. Each tracked object is counted when its feet cross the line.';
+    $('#z-info').textContent = mode === 'zone'
+      ? (roi.length ? `${roi.length} point${roi.length === 1 ? '' : 's'}${roi.length < 3 ? ' (need at least 3)' : ''}` : 'No zone, the whole frame is used')
+      : (line.length === 2 ? 'Line set' : line.length ? 'Click the second point' : 'No counting line');
+    if (roi.length) {
+      g.beginPath(); roi.forEach((p, i) => i ? g.lineTo(p[0] * W, p[1] * H) : g.moveTo(p[0] * W, p[1] * H));
+      if (roi.length >= 3) { g.closePath(); g.fillStyle = 'rgba(45,212,191,.2)'; g.fill(); }
+      g.strokeStyle = '#2dd4bf'; g.lineWidth = 2.5; g.stroke();
+      roi.forEach(p => { g.beginPath(); g.arc(p[0] * W, p[1] * H, 5, 0, 7); g.fillStyle = '#fff'; g.fill(); });
+    }
+    if (line.length) {
+      const [ax, ay] = [line[0][0] * W, line[0][1] * H];
+      g.strokeStyle = '#fbbf24'; g.lineWidth = 3;
+      if (line.length === 2) {
+        const bx = line[1][0] * W, by = line[1][1] * H, mx = (ax + bx) / 2, my = (ay + by) / 2, n = Math.max(1, Math.hypot(bx - ax, by - ay));
+        const tx = mx - (by - ay) / n * 30, ty = my + (bx - ax) / n * 30;
+        g.beginPath(); g.moveTo(ax, ay); g.lineTo(bx, by); g.moveTo(mx, my); g.lineTo(tx, ty); g.stroke();
+        g.font = 'bold 14px system-ui'; g.fillStyle = '#fbbf24'; g.fillText('in', tx + 4, ty + 4);
+      }
+      line.forEach(p => { g.beginPath(); g.arc(p[0] * W, p[1] * H, 5, 0, 7); g.fillStyle = '#fff'; g.fill(); });
+    }
   };
   img.onload = draw; if (img.complete) draw(); window.addEventListener('resize', draw, { once: true });
-  cv.onclick = e => { const b = cv.getBoundingClientRect(); roi.push([+((e.clientX - b.left) / b.width).toFixed(4), +((e.clientY - b.top) / b.height).toFixed(4)]); draw(); };
-  $('#z-undo').onclick = () => { roi.pop(); draw(); }; $('#z-clear').onclick = () => { roi = []; draw(); };
+  cv.onclick = e => {
+    const b = cv.getBoundingClientRect(), p = [+((e.clientX - b.left) / b.width).toFixed(4), +((e.clientY - b.top) / b.height).toFixed(4)];
+    if (mode === 'zone') roi.push(p); else { if (line.length >= 2) line = []; line.push(p); }
+    draw();
+  };
+  const setMode = m => { mode = m; document.querySelectorAll('#z-mode button').forEach(x => x.classList.toggle('on', x.dataset.m === m)); draw(); };
+  $('#z-mode').onclick = e => { const b = e.target.closest('button'); if (b) setMode(b.dataset.m); };
+  $('#z-undo').onclick = () => { (mode === 'zone' ? roi : line).pop(); draw(); };
+  $('#z-clear').onclick = () => { if (mode === 'zone') roi = []; else line = []; draw(); };
   $('#a-conf').oninput = e => $('#a-conf-v').textContent = e.target.value;
+  const fields = () => {                           // show the settings the chosen condition uses
+    const c = $('#r-cond').value;
+    $('#r-unacc').classList.toggle('hidden', c !== 'unaccompanied');
+    $('#r-group').classList.toggle('hidden', c !== 'group');
+    $('#r-still').classList.toggle('hidden', c !== 'still');
+    $('#r-line').classList.toggle('hidden', c !== 'crossing');
+    $('#r-count-f').classList.toggle('hidden', c === 'absent' || c === 'still' || c === 'crossing');
+    $('#r-min-f').classList.toggle('hidden', c === 'crossing');
+    $('#r-count-l').textContent = c === 'group' ? 'Objects in the group (or more)' : 'Number of objects (or more)';
+    $('#r-min-l').textContent = c === 'still' ? 'Not moving for (seconds)' : 'Must hold for (seconds)';
+  };
+  fields();
   $('#r-cond').onchange = e => {
-    const u = e.target.value === 'unaccompanied';
-    $('#r-unacc').classList.toggle('hidden', !u);
-    if (u && !$('#a-classes').value.trim()) $('#a-classes').value = 'dog';
+    const c = e.target.value, u = c === 'unaccompanied';
+    if (['unaccompanied', 'group', 'still', 'crossing'].includes(c) && !$('#a-classes').value.trim()) $('#a-classes').value = 'dog';
     if (u) $('#r-blur').checked = true;
+    if (c === 'group' && +$('#r-count').value < 2) $('#r-count').value = 3;
+    if (c === 'still' && +$('#r-min').value < 10) $('#r-min').value = 30;
+    if (c === 'crossing') setMode('line');
+    fields();
   };
   $('#a-load').onclick = async () => {
     try { const c = await api(`/models/${$('#a-model').value}/classes`); $('#a-cls-hint').textContent = 'Model classes: ' + c.join(', '); }
@@ -506,9 +594,11 @@ async function analyticForm(cid, a) {
       classes: $('#a-classes').value.split(',').map(s => s.trim()).filter(Boolean), roi, enabled: $('#a-on').checked, webhook_url: $('#a-hook').value,
       rule: { condition: $('#r-cond').value, count: +$('#r-count').value, min_seconds: +$('#r-min').value, cooldown_seconds: +$('#r-cool').value, severity: $('#r-sev').value,
         days: [...document.querySelectorAll('.r-day:checked')].map(x => +x.value), start: $('#r-start').value || '00:00', end: $('#r-end').value || '23:59',
-        companions: $('#r-comp').value.split(',').map(s => s.trim()).filter(Boolean), companion_radius: +$('#r-rad').value || 3, blur_people: $('#r-blur').checked }
+        companions: $('#r-comp').value.split(',').map(s => s.trim()).filter(Boolean), companion_radius: +$('#r-rad').value || 3, blur_people: $('#r-blur').checked,
+        group_radius: +$('#r-grad').value || 2, still_tolerance: +$('#r-stol').value || 3, line: line.length === 2 ? line : [], line_direction: $('#r-dir').value }
     };
     try {
+      if (body.rule.condition === 'crossing' && line.length !== 2) throw new Error('Draw the counting line first: choose Counting line and click two points on the picture.');
       if (isNew) await api(`/cameras/${cid}/analytics`, { method: 'POST', json: body }); else await api('/analytics/' + a.id, { method: 'PUT', json: body });
       closeModal(); toast('Saved', 'The analytic reloads on the next frame.'); route();
     } catch (e) { fail(e); }
@@ -608,6 +698,10 @@ document.addEventListener('click', async e => {
       const p = withCams.find(p => /stray/i.test(p.name)) || withCams.find(p => /safety/i.test(p.name)) || withCams[0]; if (!p) return;
       const c = (await api(`/projects/${p.id}/cameras`))[0];
       await api(`/cameras/${c.id}/start`, { method: 'POST' }); location.hash = '#/c/' + c.id;
+    }
+    else if (act === 'add-examples') {
+      const r = await api('/examples', { method: 'POST' });
+      toast(r.added.length ? 'Examples added' : 'Nothing to add', r.added.length ? r.added.join(', ') : 'The example projects are already here.'); route();
     }
     else if (act === 'quick-model') { location.hash = '#/models'; await pageModels(); modelForm(); }
     else if (act === 'quick-webcam') {

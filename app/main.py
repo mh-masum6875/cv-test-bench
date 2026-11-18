@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from . import db
 from .db import DATA, DEFAULT_RULE, HEAT_H, HEAT_W, loads
 from .detectors import build_detector, kind_for
+from .examples import add_examples
 from .runner import encode, manager, placeholder
 
 db.init()
@@ -103,6 +104,7 @@ def project_delete(pid: int):
         camera_delete(c["id"])
     db.run("DELETE FROM alerts WHERE project_id=?", (pid,))
     db.run("DELETE FROM sightings WHERE project_id=?", (pid,))
+    db.run("DELETE FROM crossings WHERE project_id=?", (pid,))
     db.run("DELETE FROM projects WHERE id=?", (pid,))
     return {"ok": True}
 
@@ -180,6 +182,7 @@ def camera_delete(cid: int):
     db.run("DELETE FROM analytics WHERE camera_id=?", (cid,))
     db.run("DELETE FROM alerts WHERE camera_id=?", (cid,))
     db.run("DELETE FROM sightings WHERE camera_id=?", (cid,))
+    db.run("DELETE FROM crossings WHERE camera_id=?", (cid,))
     db.run("DELETE FROM heat WHERE camera_id=?", (cid,))
     (DATA / "stills" / f"{cid}.jpg").unlink(missing_ok=True)
     db.run("DELETE FROM cameras WHERE id=?", (cid,))
@@ -457,14 +460,24 @@ def _since(days):
     return time.time() - max(0.01, float(days)) * 86400
 
 
+def _label_filter(label, col="label"):
+    label = (label or "").strip().lower()
+    return (f" AND lower({col})=?", [label]) if label else ("", [])
+
+
 @app.get("/api/projects/{pid}/insights")
-def insights(pid: int, days: float = 7, unaccompanied_only: bool = False):
-    """Totals, hour-of-day and daily trends and a per-camera summary of tracked sightings."""
+def insights(pid: int, days: float = 7, unaccompanied_only: bool = False, label: str = ""):
+    """Totals, hour-of-day and daily trends and a per-camera summary of tracked sightings.
+    `label` limits everything to one class, for example dog."""
     need(db.one("SELECT id FROM projects WHERE id=?", (pid,)), "Project")
     where, args = "project_id=? AND first_ts>=?", [pid, _since(days)]
     if unaccompanied_only:
         where += " AND unaccompanied=1"
-    rows = db.q(f"SELECT camera_id, first_ts, duration, unaccompanied, group_max FROM sightings WHERE {where}", args)
+    extra, extra_args = _label_filter(label)
+    rows = db.q(f"SELECT camera_id, first_ts, duration, unaccompanied, group_max, still_max FROM sightings "
+                f"WHERE {where}{extra}", args + extra_args)
+    labels = [r["l"] for r in db.q("SELECT DISTINCT lower(label) l FROM sightings WHERE project_id=? AND first_ts>=? "
+                                    "ORDER BY l", (pid, _since(days))) if r["l"]]
     by_hour = [0] * 24
     by_day = {}
     for r in rows:
@@ -477,74 +490,136 @@ def insights(pid: int, days: float = 7, unaccompanied_only: bool = False):
     per_cam = {}
     for r in rows:
         c = per_cam.setdefault(r["camera_id"], {"camera_id": r["camera_id"], "name": cams.get(r["camera_id"], "Camera removed"),
-                                                "sightings": 0, "unaccompanied": 0, "dwell": 0.0, "group_max": 0})
+                                                "sightings": 0, "unaccompanied": 0, "dwell": 0.0, "group_max": 0,
+                                                "crossed_in": 0, "crossed_out": 0})
         c["sightings"] += 1
         c["unaccompanied"] += r["unaccompanied"]
         c["dwell"] += r["duration"] or 0
         c["group_max"] = max(c["group_max"], r["group_max"] or 1)
     for c in per_cam.values():
         c["avg_dwell"] = round(c.pop("dwell") / max(1, c["sightings"]), 1)
+    # line crossings, counted when they happen
+    extra, extra_args = _label_filter(label)
+    xs = db.q(f"SELECT camera_id, ts, direction FROM crossings WHERE project_id=? AND ts>=?{extra}",
+              [pid, _since(days)] + extra_args)
+    cross_in, cross_out = [0] * 24, [0] * 24
+    for x in xs:
+        hr = dt.datetime.fromtimestamp(x["ts"]).hour
+        (cross_in if x["direction"] == "in" else cross_out)[hr] += 1
+        c = per_cam.setdefault(x["camera_id"], {"camera_id": x["camera_id"], "name": cams.get(x["camera_id"], "Camera removed"),
+                                                "sightings": 0, "unaccompanied": 0, "avg_dwell": 0, "group_max": 0,
+                                                "crossed_in": 0, "crossed_out": 0})
+        c["crossed_in" if x["direction"] == "in" else "crossed_out"] += 1
     n = len(rows)
     return {
         "days": days,
+        "label": (label or "").strip().lower(),
+        "labels": labels,
         "totals": {"sightings": n, "unaccompanied": sum(r["unaccompanied"] for r in rows),
                    "avg_dwell": round(sum(r["duration"] or 0 for r in rows) / max(1, n), 1),
                    "group_max": max([r["group_max"] or 1 for r in rows] or [0]),
+                   "still_max": round(max([r["still_max"] or 0 for r in rows] or [0]), 1),
+                   "crossed_in": sum(cross_in), "crossed_out": sum(cross_out),
                    "busiest_hour": max(range(24), key=lambda h: by_hour[h]) if n else None},
         "by_hour": by_hour,
+        "crossings_by_hour": {"in": cross_in, "out": cross_out},
         "by_day": [by_day[k] for k in sorted(by_day)],
         "cameras": sorted(per_cam.values(), key=lambda c: -c["sightings"]),
     }
 
 
 @app.get("/api/projects/{pid}/sightings")
-def sightings(pid: int, days: float = 7, limit: int = 200):
+def sightings(pid: int, days: float = 7, limit: int = 200, label: str = ""):
+    extra, extra_args = _label_filter(label, "s.label")
     rows = db.q("SELECT s.*, c.name camera_name FROM sightings s LEFT JOIN cameras c ON c.id=s.camera_id "
-                "WHERE s.project_id=? AND s.first_ts>=? ORDER BY s.first_ts DESC LIMIT ?", (pid, _since(days), limit))
+                f"WHERE s.project_id=? AND s.first_ts>=?{extra} ORDER BY s.first_ts DESC LIMIT ?",
+                (pid, _since(days), *extra_args, limit))
     return rows
 
 
 @app.get("/api/projects/{pid}/sightings.csv")
-def sightings_csv(pid: int, days: float = 30):
-    rows = sightings(pid, days, 100000)
+def sightings_csv(pid: int, days: float = 30, label: str = ""):
+    rows = sightings(pid, days, 100000, label)
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(["camera", "label", "track_id", "first_seen", "last_seen", "duration_s", "unaccompanied",
-                "seconds_alone", "share_of_time_alone", "largest_group", "x_in_frame", "y_in_frame", "confidence"])
+                "seconds_alone", "share_of_time_alone", "largest_group", "longest_still_s", "crossed_in", "crossed_out",
+                "x_in_frame", "y_in_frame", "confidence"])
     for r in rows:
         w.writerow([r["camera_name"], r["label"], r["track_id"],
                     dt.datetime.fromtimestamp(r["first_ts"]).isoformat(timespec="seconds"),
                     dt.datetime.fromtimestamp(r["last_ts"]).isoformat(timespec="seconds"),
                     r["duration"], "yes" if r["unaccompanied"] else "no", r["alone_seconds"], r["alone_share"], r["group_max"],
-                    r["cx"], r["cy"], r["conf"]])
+                    r["still_max"], r["crossed_in"], r["crossed_out"], r["cx"], r["cy"], r["conf"]])
     name = f"sightings_project{pid}_{dt.date.today().isoformat()}.csv"
     return Response(buf.getvalue(), media_type="text/csv",
                     headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
+@app.get("/api/projects/{pid}/crossings.csv")
+def crossings_csv(pid: int, days: float = 30, label: str = ""):
+    """Line crossings per hour, per camera and direction."""
+    extra, extra_args = _label_filter(label, "x.label")
+    rows = db.q("SELECT x.*, c.name camera_name FROM crossings x LEFT JOIN cameras c ON c.id=x.camera_id "
+                f"WHERE x.project_id=? AND x.ts>=?{extra} ORDER BY x.ts", (pid, _since(days), *extra_args))
+    per = {}
+    for r in rows:
+        hour = dt.datetime.fromtimestamp(r["ts"]).strftime("%Y-%m-%d %H:00")
+        k = (hour, r["camera_name"] or "Camera removed", r["label"])
+        e = per.setdefault(k, {"in": 0, "out": 0})
+        e[r["direction"]] += 1
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["hour", "camera", "label", "in", "out"])
+    for (hour, cam, lab), e in per.items():
+        w.writerow([hour, cam, lab, e["in"], e["out"]])
+    name = f"crossings_project{pid}_{dt.date.today().isoformat()}.csv"
+    return Response(buf.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
 @app.get("/api/cameras/{cid}/heatmap")
-def heatmap(cid: int, days: float = 7):
-    """Where tracked targets stood, as a grid of counts over the camera frame (row by row)."""
+def heatmap(cid: int, days: float = 7, label: str = ""):
+    """Where tracked targets stood, as a grid of counts over the camera frame (row by row).
+    With `label`, only that class. Heat saved before labels were stored counts for all classes only."""
     need(db.one("SELECT id FROM cameras WHERE id=?", (cid,)), "Camera")
+    label = (label or "").strip().lower()
     grid = [0] * (HEAT_W * HEAT_H)
     since_hour = int(_since(days) // 3600)
-    for r in db.q("SELECT cell, SUM(n) n FROM heat WHERE camera_id=? AND hour>=? GROUP BY cell", (cid, since_hour)):
+    sql, args = "SELECT cell, SUM(n) n FROM heat WHERE camera_id=? AND hour>=?", [cid, since_hour]
+    if label:
+        sql += " AND label=?"
+        args.append(label)
+    for r in db.q(sql + " GROUP BY cell", args):
         if 0 <= r["cell"] < len(grid):
             grid[r["cell"]] = r["n"]
     r = manager.get(cid)                       # include what has not been written to the database yet
     if r:
-        for a in r.analytics:
-            for i, v in enumerate(a.heat.tolist()):
-                grid[i] += int(v)
-    return {"w": HEAT_W, "h": HEAT_H, "grid": grid, "max": max(grid)}
+        for g in list(r.groups):
+            for lab, cells in list(g.heat.items()):
+                if label and lab != label:
+                    continue
+                for i, v in enumerate(cells.tolist()):
+                    grid[i] += int(v)
+    return {"w": HEAT_W, "h": HEAT_H, "grid": grid, "max": max(grid), "label": label}
 
 
 @app.delete("/api/projects/{pid}/insights")
 def insights_clear(pid: int):
     db.run("DELETE FROM sightings WHERE project_id=?", (pid,))
+    db.run("DELETE FROM crossings WHERE project_id=?", (pid,))
     for c in db.q("SELECT id FROM cameras WHERE project_id=?", (pid,)):
         db.run("DELETE FROM heat WHERE camera_id=?", (c["id"],))
     return {"ok": True}
+
+
+@app.post("/api/examples")
+def examples():
+    """Add the ready-made example projects (the same ones as the browser demo)."""
+    try:
+        return {"added": add_examples()}
+    except FileNotFoundError as e:
+        raise HTTPException(400, str(e))
 
 
 @app.get("/api/health")

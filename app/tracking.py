@@ -103,6 +103,62 @@ class Tracker:
         return ended
 
 
+def groups(boxes, radius):
+    """Split boxes into groups. Two boxes are in the same group when their centres are within
+    `radius` box-heights (the taller of the two) of each other; groups chain through neighbours.
+    Returns one group number per box."""
+    parent = list(range(len(boxes)))
+
+    def root(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for i, a in enumerate(boxes):
+        for j in range(i + 1, len(boxes)):
+            b = boxes[j]
+            (ax, ay), (bx, by) = centre(a), centre(b)
+            reach = max(a[3] - a[1], b[3] - b[1], 1.0) * radius
+            if ((ax - bx) ** 2 + (ay - by) ** 2) ** 0.5 <= reach:
+                parent[root(i)] = root(j)
+    return [root(i) for i in range(len(boxes))]
+
+
+def group_sizes(boxes, radius):
+    """Size of the group each box is in."""
+    g = groups(boxes, radius)
+    return [g.count(x) for x in g]
+
+
+def still_update(track, foot, ts, tolerance):
+    """Seconds the track has stayed within `tolerance` pixels of the point where it stopped.
+    The anchor moves to the new position as soon as the object leaves that circle."""
+    anchor = getattr(track, "anchor", None)
+    if anchor is None or ((foot[0] - anchor[0]) ** 2 + (foot[1] - anchor[1]) ** 2) ** 0.5 > tolerance:
+        track.anchor, track.still_since = foot, ts
+    track.still_seconds = ts - track.still_since
+    return track.still_seconds
+
+
+def _side(p, a, b):
+    return (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0])
+
+
+def crossing(prev, cur, a, b):
+    """+1 when the move prev -> cur crosses the line a-b to its right (seen from a towards b),
+    -1 when it crosses to the left, 0 when it does not cross."""
+    if prev is None or a is None or b is None:
+        return 0
+    s1, s2 = _side(prev, a, b), _side(cur, a, b)
+    if s1 == 0 or (s1 > 0) == (s2 > 0) or s2 == 0:
+        return 0
+    t1, t2 = _side(a, prev, cur), _side(b, prev, cur)     # the line must be crossed between a and b, not beyond
+    if (t1 > 0) == (t2 > 0) and t1 != 0 and t2 != 0:
+        return 0
+    return 1 if s2 > 0 else -1
+
+
 def is_alone(box, companions, radius):
     """True when no companion box (for example a person) is within `radius` dog-heights of the dog."""
     if not companions:

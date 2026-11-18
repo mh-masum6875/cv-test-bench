@@ -20,8 +20,12 @@ drawn over the aisle. This is the dashboard around it:
 * Models: a built-in motion detector, any YOLO detection model exported to ONNX, and `.pt` or `.engine`
   weights through Ultralytics. Each analytic card shows objects now, milliseconds per frame and a
   one-minute chart, so two models can be compared on the same footage.
-* Zones, tracking with IDs, and alert rules with dwell time, cooldown and a schedule. Alerts are saved
-  with a snapshot and can be sent to a webhook.
+* Zones, counting lines, tracking with IDs, and alert rules with dwell time, cooldown and a schedule.
+  Alerts are saved with a snapshot and can be sent to a webhook.
+* An Insights tab per project: sightings, a heatmap per camera that can be limited to one class, charts
+  by hour and day, line crossings per hour, and CSV export.
+* Ready-made example projects (stray dogs, traffic, a safety zone, counting bottles). In the server
+  version, press **Add example projects** on the Projects page.
 * The hosted site runs the same interface fully in the browser. Nothing is uploaded, and a model you
   add there stays on your computer.
 
@@ -89,8 +93,9 @@ compare models on the same footage.
 
 | Setting | Meaning |
 | --- | --- |
-| Alert when | `objects are present` (N or more), `nothing is detected`, or `an object is alone` (N or more targets with no companion nearby) |
-| Must hold for | The condition has to stay true this many seconds before an alert fires (dwell time) |
+| Alert when | `objects are present` (N or more), `nothing is detected`, `an object is alone` (no companion such as a person nearby), `objects are in a group` (N or more within R object-heights of each other), `an object stays still` (its feet move less than a set share of the frame width for the hold time), or `an object crosses the line` (in, out or either way) |
+| Counting line | Two points drawn on the picture. Every tracked object that crosses it is counted in each direction, whatever the rule. The arrow points to the "in" side |
+| Must hold for | The condition has to stay true this many seconds before an alert fires (dwell time). For `an object stays still` it is the time without moving. A line crossing alerts at once |
 | Wait between alerts | Cooldown, so one event does not flood you |
 | Active on, From, Until | Days and a time window. Windows that cross midnight work, for example 22:00 to 06:00 |
 | Severity | info, warning or critical |
@@ -107,9 +112,9 @@ compare models on the same footage.
 
 ## Stray dog monitoring
 
-One of the example projects counts dogs that are on a street with no person near them. It uses the
-tracker, an "an object is alone" rule, a sightings log, a heatmap and a CSV export. The details and
-its limits are in [docs/STRAY_DOGS.md](docs/STRAY_DOGS.md).
+One of the example projects watches dogs on a street: a dog with no person near it, a pack of three or
+more, a dog that stops moving, and dogs crossing the road, with a dog-only heatmap and a CSV export. The
+details and its limits are in [docs/STRAY_DOGS.md](docs/STRAY_DOGS.md).
 
 ## Where things are
 
@@ -117,7 +122,8 @@ its limits are in [docs/STRAY_DOGS.md](docs/STRAY_DOGS.md).
 app/main.py        API routes
 app/runner.py      one worker per camera: read, detect, apply rules, draw
 app/detectors.py   Motion, Ultralytics, ONNX Runtime and RF-DETR detectors. Add your own here
-app/tracking.py    tracker and the "alone" check used by the unaccompanied rule
+app/tracking.py    tracker, and the alone, group, still and line crossing checks
+app/examples.py    the ready-made example projects for the server version
 app/rules.py       dwell time, cooldown and schedule logic
 app/db.py          SQLite tables
 docs/              the web interface (plain JavaScript, no build step). Also what GitHub Pages serves
@@ -136,7 +142,7 @@ To use a model that is not Ultralytics, subclass `Detector` in `app/detectors.py
 
 ```bash
 pip install pytest requests
-python -m pytest tests/test_tracking.py tests/test_rules.py
+python -m pytest tests/test_tracking.py tests/test_rules.py tests/test_analytics.py
 python tests/test_api.py http://127.0.0.1:8000 samples/demo.mp4     # with the server running
 ```
 
@@ -148,7 +154,9 @@ python tests/test_api.py http://127.0.0.1:8000 samples/demo.mp4     # with the s
   RTSP streams.
 * There are no user accounts. The only protection is one shared login set with `APP_USER` and `APP_PASSWORD`.
 * One process and SQLite. It is a test tool for a handful of cameras, not a video management system.
-* The tracker is simple IoU matching. An object hidden for a few seconds comes back with a new ID.
+* The tracker is simple IoU matching. An object hidden for a few seconds comes back with a new ID, and
+  a fast object at a low frame rate can be missed by a counting line. Raise **Process at most** for fast
+  traffic.
 * I tested the server on Windows 11 with Python 3.13. The Mac, Linux and Docker commands are not covered by that test.
 * RF-DETR support is written against the rfdetr package but has not been run.
 
