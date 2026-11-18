@@ -13,6 +13,14 @@ def det(x, y, w=60, h=50, label="dog"):
     return {"label": label, "conf": 0.8, "box": [x, y, x + w, y + h]}
 
 
+def test_a_distant_person_is_not_a_companion():
+    dog = [336, 204, 434, 275]                        # 71 px tall, close to the camera
+    far = [262, 115, 273, 139]                        # 24 px tall and 120 px away: far down the street
+    near = [300, 120, 360, 280]                       # a person standing next to the dog
+    assert is_alone(dog, [far], 3.0)
+    assert not is_alone(dog, [near], 3.0)
+
+
 def test_iou():
     assert abs(iou([0, 0, 10, 10], [0, 0, 10, 10]) - 1.0) < 1e-6
     assert iou([0, 0, 10, 10], [20, 20, 30, 30]) == 0.0

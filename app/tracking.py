@@ -105,8 +105,9 @@ class Tracker:
 
 def groups(boxes, radius):
     """Split boxes into groups. Two boxes are in the same group when their centres are within
-    `radius` box-heights (the taller of the two) of each other; groups chain through neighbours.
-    Returns one group number per box."""
+    `radius` box-heights (the mean of the two) of each other; groups chain through neighbours.
+    Boxes whose heights differ by more than 2x are at different distances from the camera (a near dog
+    and a far one can look close on screen), so they are never joined. Returns one group number per box."""
     parent = list(range(len(boxes)))
 
     def root(i):
@@ -119,7 +120,10 @@ def groups(boxes, radius):
         for j in range(i + 1, len(boxes)):
             b = boxes[j]
             (ax, ay), (bx, by) = centre(a), centre(b)
-            reach = max(a[3] - a[1], b[3] - b[1], 1.0) * radius
+            ha, hb = max(a[3] - a[1], 1.0), max(b[3] - b[1], 1.0)
+            if max(ha, hb) > 2 * min(ha, hb):
+                continue
+            reach = (ha + hb) / 2 * radius
             if ((ax - bx) ** 2 + (ay - by) ** 2) ** 0.5 <= reach:
                 parent[root(i)] = root(j)
     return [root(i) for i in range(len(boxes))]
@@ -160,12 +164,16 @@ def crossing(prev, cur, a, b):
 
 
 def is_alone(box, companions, radius):
-    """True when no companion box (for example a person) is within `radius` dog-heights of the dog."""
+    """True when no companion box (for example a person) is within `radius` dog-heights of the dog.
+    A companion much shorter than the dog is far behind it (or is a distant object the model mistook
+    for a person), so it is not counted as being with the dog."""
     if not companions:
         return True
     cx, cy = centre(box)
-    reach = max(box[3] - box[1], box[2] - box[0], 1.0) * radius
+    reach = max(box[3] - box[1], 1.0) * radius             # in dog-heights: a dog lying down is wide, not tall
     for c in companions:
+        if c[3] - c[1] < 0.6 * (box[3] - box[1]):
+            continue
         # distance from the dog's centre to the nearest point of the companion's box
         nx = min(max(cx, c[0]), c[2])
         ny = min(max(cy, c[1]), c[3])

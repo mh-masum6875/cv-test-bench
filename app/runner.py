@@ -13,11 +13,12 @@ import numpy as np
 from . import db
 from .detectors import build_detector, inside
 from .rules import RuleState
-from .tracking import Tracker, crossing, group_sizes, iou, is_alone, still_update
+from .tracking import Tracker, crossing, group_sizes, groups, iou, is_alone, still_update
 
 COAST = 1.0                  # seconds a missed track keeps its box on screen
 ALONE = (60, 60, 235)        # BGR red for an unaccompanied target, a group or an object that stopped
 WITH = (250, 140, 60)        # BGR blue for a target with a companion nearby
+PACK = (40, 160, 250)        # BGR orange for the outline around a group
 
 os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
 
@@ -364,6 +365,15 @@ class CameraRunner:
             people = [c["box"] for c in a.last_companions]
             for t in confirmed:
                 was_alone, t.alone = t.alone, is_alone(t.box, people, radius)
+                # what the screen shows changes only after the new state has held for a moment (1 s to show
+                # alone, 0.5 s to show with a person), so a person seen or missed for one frame does not flip it
+                want = "alone" if t.alone else "with"
+                if want == getattr(t, "shown", None):
+                    t.pending = None
+                elif getattr(t, "pending", None) != want:
+                    t.pending, t.pending_since = want, ts
+                elif ts - t.pending_since >= (1.0 if want == "alone" else 0.5):
+                    t.shown, t.pending = want, None
                 t.frames_alone += int(t.alone)
                 if t.alone and was_alone:
                     t.alone_seconds += min(ts - t.prev_ts, g.tracker.max_age)
@@ -385,15 +395,26 @@ class CameraRunner:
                     crossed += 1
                     a.last_direction = d
                 self._save_crossing(a, t, ts, d)
+        packs = []
         if cond == "group":
             # only boxes seen in this frame: a held box can belong to an object that already left
-            sizes = group_sizes([t.box for t in confirmed], float(a.rule.get("group_radius") or 2.0))
+            radius = float(a.rule.get("group_radius") or 2.0)
+            sizes = group_sizes([t.box for t in confirmed], radius)
+            members = {}
+            for t, root in zip(confirmed, groups([t.box for t in confirmed], radius)):
+                members.setdefault(root, []).append(t.box)
+            for boxes in members.values():               # one outline around each group big enough to alert on
+                if len(boxes) >= max(2, int(a.rule.get("count") or 2)):
+                    packs.append(([min(b[0] for b in boxes), min(b[1] for b in boxes),
+                                   max(b[2] for b in boxes), max(b[3] for b in boxes)], len(boxes)))
             for t, n in zip(confirmed, sizes):
                 t.group_now = n
                 t.group_max = max(getattr(t, "group_max", 1), n)
             for t in coast:                              # a held box is not counted, so it shows no group either
                 t.group_now = 1
             a.group_now = max(sizes, default=0)
+        if packs or ts - getattr(a, "packs_ts", -9) > 0.5:    # keep the outline for half a second so it does not blink
+            a.packs, a.packs_ts = packs, (ts if packs else getattr(a, "packs_ts", -9))
         hold = float(a.rule.get("min_seconds") or 0)
         a.still_longest = max([getattr(t, "still_seconds", 0.0) for t in shown], default=0.0)
         a.still_now = sum(1 for t in shown if getattr(t, "still_seconds", 0.0) >= hold) if cond == "still" else 0
@@ -403,13 +424,16 @@ class CameraRunner:
             d = dict(d)
             t = by_id.get(d.get("track_id"))
             d["confirmed"] = t is not None
-            d["alone"] = bool(t and t.alone and cond == "unaccompanied")
+            # on screen a dog turns red only after a second alone, so a companion missed for a frame does not flash it
+            state = getattr(t, "shown", None) if t and cond == "unaccompanied" else None
+            d["alone"], d["with"] = state == "alone", state == "with"
             self._mark(d, t, cond, hold, a.rule, ts, a.line is not None)
             a.last_dets.append(d)
         a.coast = []
         for t in coast:
             d = {"label": t.label, "conf": t.conf, "box": t.box, "track_id": t.id, "confirmed": True,
-                 "alone": t.alone and cond == "unaccompanied"}
+                 "alone": cond == "unaccompanied" and getattr(t, "shown", None) == "alone",
+                 "with": cond == "unaccompanied" and getattr(t, "shown", None) == "with"}
             self._mark(d, t, cond, hold, a.rule, ts, a.line is not None)
             a.coast.append(d)
         a.tracks_now = len(shown)
@@ -418,19 +442,15 @@ class CameraRunner:
 
     @staticmethod
     def _mark(d, t, cond, hold, rule, ts, has_line=False):
-        """Extra state shown on a box: group size, time without moving, a fresh line crossing."""
+        """Extra state shown on a box: time without moving, a fresh line crossing. Groups get their own outline."""
         if t is None:
             return
-        if cond == "group":
-            n = getattr(t, "group_now", 1)
-            d["flag"] = n >= max(2, int(rule.get("count") or 2))
-            d["note"] = f" group of {n}" if n > 1 else ""
-        elif cond == "still":
+        if cond == "still":
             sec = getattr(t, "still_seconds", 0.0)
             d["flag"] = sec >= hold
-            d["note"] = f" still {sec:.0f}s" if sec >= 2 else ""
+            d["note"] = f" still {sec:.0f}s" if sec >= max(2.0, hold / 2) else ""
         if has_line and ts - getattr(t, "flash", -9) < 1.0:
-            d["flag"], d["note"] = True, d.get("note", "") + " crossed"
+            d["note"] = d.get("note", "") + " crossed"
 
     def _save_crossing(self, a, t, ts, direction):
         db.run("INSERT INTO crossings(project_id,camera_id,analytics_id,track_id,label,ts,direction) VALUES(?,?,?,?,?,?,?)",
@@ -488,7 +508,25 @@ class CameraRunner:
 
     def _draw(self, frame):
         h, w = frame.shape[:2]
-        marks = {}                  # analytics on the same model see the same box: draw it once with all notes
+        font, scale = cv2.FONT_HERSHEY_SIMPLEX, 0.5
+        placed = []                 # label rectangles already drawn, so the next one can avoid them
+
+        def tag(text, x1, y1, x2, y2, color, ink=(15, 15, 15)):
+            """A filled label next to a box: above it, else below it, else inside its top edge."""
+            tw, th = cv2.getTextSize(text, font, scale, 1)[0]
+            tw, th = tw + 8, th + 8
+            spots = [(x1, y1 - th), (x1, y2), (x1, y1)] + [(x1, y1 - th - k * th) for k in range(1, 4)] \
+                + [(x1, y2 + k * th) for k in range(1, 4)]     # then further up or down, stacked
+            free = lambda sx, sy: not any(sx < px2 and px1 < sx + tw and sy < py2 and py1 < sy + th
+                                          for px1, py1, px2, py2 in placed)
+            clamp = lambda sx, sy: (min(max(0, sx), w - tw), min(max(0, sy), h - th))
+            sx, sy = next((clamp(*p) for p in spots if free(*clamp(*p))), clamp(*spots[0]))
+            placed.append((sx, sy, sx + tw, sy + th))
+            cv2.rectangle(frame, (sx, sy), (sx + tw, sy + th), color, -1)
+            cv2.putText(frame, text, (sx + 4, sy + th - 6), font, scale, ink, 1, cv2.LINE_AA)
+
+        marks = {}                  # analytics on the same model see the same box: draw it once
+        packs, counters = [], []
         for a in self.analytics:
             if a.roi and len(a.roi) >= 3:
                 pts = np.array([[int(p[0] * w), int(p[1] * h)] for p in a.roi], np.int32)
@@ -503,32 +541,47 @@ class CameraRunner:
                 n = max(1.0, (dx * dx + dy * dy) ** 0.5)
                 tip = (int(mx - dy / n * 28), int(my + dx / n * 28))   # arrow towards the "in" side
                 cv2.arrowedLine(frame, (mx, my), tip, a.color, 2, cv2.LINE_AA, tipLength=0.35)
-                text = f"in {a.n_in}  out {a.n_out}"
-                cv2.putText(frame, text, (tip[0] + 6, tip[1] + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 3, cv2.LINE_AA)
-                cv2.putText(frame, text, (tip[0] + 6, tip[1] + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
+                counters.append((a, f"in {a.n_in}  out {a.n_out}"))
             unacc = a.rule.get("condition") == "unaccompanied"
+            packs += getattr(a, "packs", [])
             for d in list(getattr(a, "last_dets", [])) + list(getattr(a, "coast", [])):
+                if not d.get("confirmed"):               # a box seen once is not drawn, so single-frame flashes do not show
+                    continue
                 key = tuple(int(round(v / 4)) for v in d["box"])
                 m = marks.setdefault(key, {"box": d["box"], "label": d["label"], "id": None, "notes": [], "color": a.color, "prio": 0})
                 confirmed = d.get("confirmed")
                 if m["id"] is None and confirmed:
                     m["id"] = d["track_id"]
-                note = ((" alone" if d.get("alone") else " with person") if unacc and confirmed else "") + d.get("note", "")
+                note = (" alone" if unacc and confirmed and d.get("alone") else "") + d.get("note", "")
                 if note and note not in m["notes"]:
                     m["notes"].append(note)
-                prio = 2 if (unacc and confirmed and d.get("alone")) or d.get("flag") else 1 if unacc and confirmed else 0
+                # red: alone, or still for too long. Blue: a companion is near. Otherwise the analytic's colour
+                prio = 2 if (unacc and confirmed and d.get("alone")) or d.get("flag") else 1 if d.get("with") else 0
                 if prio > m["prio"]:
                     m["prio"], m["color"] = prio, ALONE if prio == 2 else WITH
+        for k, (a, text) in enumerate(counters):      # line counters in the top-left corner, where they do not move
+            tw, th = cv2.getTextSize(text, font, scale, 1)[0]
+            x, y = 8, 8 + k * (th + 14)
+            cv2.rectangle(frame, (x, y), (x + tw + 22, y + th + 8), (30, 30, 30), -1)
+            cv2.rectangle(frame, (x + 4, y + 5), (x + 12, y + th + 3), a.color, -1)
+            cv2.putText(frame, text, (x + 16, y + th + 2), font, scale, (255, 255, 255), 1, cv2.LINE_AA)
+            placed.append((x, y, x + tw + 22, y + th + 8))
+        for box, n in packs:
+            x1, y1, x2, y2 = [int(v) for v in box]
+            x1, y1, x2, y2 = max(0, x1 - 10), max(0, y1 - 10), min(w - 1, x2 + 10), min(h - 1, y2 + 10)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), PACK, 2, cv2.LINE_AA)
         for m in marks.values():
             x1, y1, x2, y2 = [int(v) for v in m["box"]]
             cv2.rectangle(frame, (x1, y1), (x2, y2), m["color"], 2)
-            tag = f' #{m["id"]}' if m["id"] is not None else ""
-            text = f'{m["label"]}{tag}{",".join(m["notes"])}'
-            tw, th = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
-            cv2.rectangle(frame, (x1, max(0, y1 - th - 8)), (x1 + tw + 8, y1), m["color"], -1)
-            cv2.putText(frame, text, (x1 + 4, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (15, 15, 15), 1, cv2.LINE_AA)
+        for m in sorted(marks.values(), key=lambda m: (-m["prio"], m["id"] or 0)):   # important labels first, then by ID
+            x1, y1, x2, y2 = [int(v) for v in m["box"]]
+            idt = f' #{m["id"]}' if m["id"] is not None else ""
+            tag(f'{m["label"]}{idt}{"".join(m["notes"])}', x1, y1, x2, y2, m["color"])
+        for box, n in packs:
+            x1, y1, x2, y2 = [int(v) for v in box]
+            tag(f"pack of {n}", max(0, x1 - 10), max(0, y1 - 10), x2, y2 + 10, PACK)
         stamp = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        cv2.putText(frame, stamp, (10, h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+        cv2.putText(frame, stamp, (10, h - 10), font, scale, (255, 255, 255), 1, cv2.LINE_AA)
 
     def _raise_alert(self, a, fired, frame):
         cam = self.cam

@@ -39,6 +39,12 @@ def test_radius_controls_the_group():
     assert group_sizes(boxes, 2.5) == [2, 2]
 
 
+def test_a_near_dog_and_a_far_dog_are_not_a_group():
+    near = [300, 250, 400, 330]                              # 80 px tall
+    far = [330, 200, 345, 215]                               # 15 px tall, up the street, close on screen
+    assert group_sizes([near, far], 2.0) == [1, 1]
+
+
 def test_no_boxes():
     assert group_sizes([], 2.0) == []
 

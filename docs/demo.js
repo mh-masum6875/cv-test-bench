@@ -362,14 +362,16 @@
     flush() { const e = this.tracks.filter(t => t.hits >= this.minHits); this.tracks = []; return e; }
   }
   function isAlone(box, companions, radius) {
-    const [cx, cy] = centre(box), reach = Math.max(box[3] - box[1], box[2] - box[0], 1) * radius;
-    return !companions.some(c => Math.hypot(cx - Math.min(Math.max(cx, c[0]), c[2]), cy - Math.min(Math.max(cy, c[1]), c[3])) <= reach);
+    const [cx, cy] = centre(box), reach = Math.max(box[3] - box[1], 1) * radius;   // in dog-heights: a dog lying down is wide, not tall
+    return !companions.some(c => c[3] - c[1] >= 0.6 * (box[3] - box[1])          // a much shorter companion is far behind the dog
+      && Math.hypot(cx - Math.min(Math.max(cx, c[0]), c[2]), cy - Math.min(Math.max(cy, c[1]), c[3])) <= reach);
   }
   function groupSizes(boxes, radius) {                         // port of app/tracking.py groups()
     const parent = boxes.map((_, i) => i), root = i => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
     for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) {
-      const a = boxes[i], b = boxes[j], [ax, ay] = centre(a), [bx, by] = centre(b), reach = Math.max(a[3] - a[1], b[3] - b[1], 1) * radius;
-      if (Math.hypot(ax - bx, ay - by) <= reach) parent[root(i)] = root(j);
+      const a = boxes[i], b = boxes[j], [ax, ay] = centre(a), [bx, by] = centre(b), ha = Math.max(a[3] - a[1], 1), hb = Math.max(b[3] - b[1], 1);
+      if (Math.max(ha, hb) > 2 * Math.min(ha, hb)) continue;          // different distance from the camera
+      if (Math.hypot(ax - bx, ay - by) <= (ha + hb) / 2 * radius) parent[root(i)] = root(j);
     }
     const g = boxes.map((_, i) => root(i)); return g.map(x => g.filter(y => y === x).length);
   }
@@ -534,6 +536,10 @@
         const people = a.comp.map(c => c.box), radius = +a.rule.companion_radius || 3;
         for (const t of conf) {
           const was = t.alone; t.alone = isAlone(t.box, people, radius);
+          const want = t.alone ? 'alone' : 'with';                    // the screen changes only after the new state holds (1 s alone, 0.5 s with a person)
+          if (want === t.shown) t.pending = null;
+          else if (t.pending !== want) { t.pending = want; t.pendingSince = ts; }
+          else if (ts - t.pendingSince >= (want === 'alone' ? 1 : 0.5)) { t.shown = want; t.pending = null; }
           if (t.alone) { t.aloneFrames++; alone++; if (was) t.aloneSec += Math.min(ts - t.prev, g.tracker.maxAge); }
         }
       }
@@ -547,24 +553,33 @@
           if (S.crossings.length > 5000) S.crossings = S.crossings.slice(-5000);
         }
       }
+      const packs = [];
       if (cond === 'group') {
         const sizes = groupSizes(conf.map(t => t.box), +a.rule.group_radius || 2);   // boxes seen in this frame only
+        const need = Math.max(2, +a.rule.count || 2), seen = new Set();
+        conf.forEach((t, i) => {                                   // one outline around each group big enough to alert on
+          if (sizes[i] < need || seen.has(t.id)) return;
+          const near = [t], queue = [t]; seen.add(t.id);
+          while (queue.length) { const u = queue.pop(); conf.forEach(v => { if (!seen.has(v.id) && groupSizes([u.box, v.box], +a.rule.group_radius || 2)[0] === 2) { seen.add(v.id); near.push(v); queue.push(v); } }); }
+          packs.push([[Math.min(...near.map(v => v.box[0])), Math.min(...near.map(v => v.box[1])), Math.max(...near.map(v => v.box[2])), Math.max(...near.map(v => v.box[3]))], near.length]);
+        });
         conf.forEach((t, i) => { t.groupNow = sizes[i]; t.group = Math.max(t.group, sizes[i]); });
         coast.forEach(t => { t.groupNow = 1; });                       // a held box is not counted, so it shows no group either
         a.group_now = sizes.length ? Math.max(...sizes) : 0;
       }
+      if (packs.length || ts - (a.packsTs ?? -9) > 0.5) { a.packs = packs; if (packs.length) a.packsTs = ts; }   // keep the outline for half a second
       const hold = +a.rule.min_seconds || 0;
       a.still_longest = shown.reduce((m, t) => Math.max(m, t.stillSec || 0), 0);
       a.still_now = cond === 'still' ? shown.filter(t => (t.stillSec || 0) >= hold).length : 0;
       const mark = (d, t) => {
         if (!t) return;
-        if (cond === 'group') { const n = t.groupNow || 1; d.flag = n >= Math.max(2, +a.rule.count || 2); d.note = n > 1 ? ' group of ' + n : ''; }
-        else if (cond === 'still') { const sec = t.stillSec || 0; d.flag = sec >= hold; d.note = sec >= 2 ? ` still ${Math.round(sec)}s` : ''; }
-        if (a.line && ts - (t.flash ?? -9) < 1) { d.flag = true; d.note = (d.note || '') + ' crossed'; }
+        if (cond === 'still') { const sec = t.stillSec || 0; d.flag = sec >= hold; d.note = sec >= Math.max(2, hold / 2) ? ` still ${Math.round(sec)}s` : ''; }
+        if (a.line && ts - (t.flash ?? -9) < 1) d.note = (d.note || '') + ' crossed';      // groups get their own outline
       };
       const byId = new Map(conf.map(t => [t.id, t])), un = cond === 'unaccompanied';
-      a.dets = g.dets.map(x => { const d = { ...x }, t = byId.get(d.track_id); d.confirmed = !!t; d.alone = !!(t && t.alone && un); mark(d, t); return d; });
-      a.coast = coast.map(t => { const d = { label: t.label, conf: t.conf, box: t.box, track_id: t.id, confirmed: true, alone: t.alone && un }; mark(d, t); return d; });
+      const shownOf = t => (t && un ? t.shown : null);
+      a.dets = g.dets.map(x => { const d = { ...x }, t = byId.get(d.track_id); d.confirmed = !!t; d.alone = shownOf(t) === 'alone'; d.with = shownOf(t) === 'with'; mark(d, t); return d; });
+      a.coast = coast.map(t => { const d = { label: t.label, conf: t.conf, box: t.box, track_id: t.id, confirmed: true, alone: shownOf(t) === 'alone', with: shownOf(t) === 'with' }; mark(d, t); return d; });
       a.tracks_now = shown.length; a.alone_now = alone + (un ? coast.filter(t => t.alone).length : 0);
       return crossed;
     }
@@ -603,10 +618,17 @@
         this.wg.filter = `blur(${Math.max(4, Math.round(Math.min(bw, bh) / 3))}px)`; this.wg.drawImage(this.tmp, 0, 0); this.wg.restore();
       }
     }
-    draw(w, h) {
+    draw(w, h) {                                                   // port of CameraRunner._draw
       this.out.width = w; this.out.height = h; const g = this.out.getContext('2d'); g.drawImage(this.work, 0, 0);
       g.lineWidth = 2; g.font = '13px system-ui';
-      const marks = new Map();
+      const placed = [], marks = new Map(), packs = [], counters = [];
+      const tag = (text, x1, y1, x2, y2, color, ink = '#0d1115') => {    // above the box, else below it, else inside its top edge
+        const tw = g.measureText(text).width + 8, th = 18;
+        const spots = [[x1, y1 - th], [x1, y2], [x1, y1], ...[1, 2, 3].map(k => [x1, y1 - th - k * th]), ...[1, 2, 3].map(k => [x1, y2 + k * th])].map(([sx, sy]) => [Math.min(Math.max(0, sx), w - tw), Math.min(Math.max(0, sy), h - th)]);
+        const [sx, sy] = spots.find(([sx, sy]) => !placed.some(([px1, py1, px2, py2]) => sx < px2 && px1 < sx + tw && sy < py2 && py1 < sy + th)) || spots[0];
+        placed.push([sx, sy, sx + tw, sy + th]);
+        g.fillStyle = color; g.fillRect(sx, sy, tw, th); g.fillStyle = ink; g.fillText(text, sx + 4, sy + 13);
+      };
       for (const a of this.analytics) {
         const roi = a.row.roi;
         if (roi && roi.length >= 3) {
@@ -619,27 +641,35 @@
           g.lineWidth = 3; g.strokeStyle = a.color; g.beginPath(); g.moveTo(ax, ay); g.lineTo(bx, by); g.stroke();
           g.lineWidth = 2; g.beginPath(); g.moveTo(mx, my); g.lineTo(tx, ty); g.stroke();
           const ang = Math.atan2(ty - my, tx - mx); g.beginPath(); g.moveTo(tx, ty); g.lineTo(tx - 9 * Math.cos(ang - 0.5), ty - 9 * Math.sin(ang - 0.5)); g.lineTo(tx - 9 * Math.cos(ang + 0.5), ty - 9 * Math.sin(ang + 0.5)); g.closePath(); g.fillStyle = a.color; g.fill();
-          const lt = `in ${a.n_in}  out ${a.n_out}`; g.font = 'bold 13px system-ui'; g.lineWidth = 3; g.strokeStyle = '#000'; g.strokeText(lt, tx + 6, ty + 5); g.fillStyle = '#fff'; g.fillText(lt, tx + 6, ty + 5);
-          g.font = '13px system-ui'; g.lineWidth = 2;
+          counters.push([a, `in ${a.n_in}  out ${a.n_out}`]);
         }
         const unacc = a.rule.condition === 'unaccompanied';
+        (a.packs || []).forEach(p => packs.push(p));
         for (const d of [...a.dets, ...(a.coast || [])]) {       // analytics on the same model see the same box: draw it once
+          if (!d.confirmed) continue;                              // a box seen once is not drawn, so single-frame flashes do not show
           const key = d.box.map(v => Math.round(v / 4)).join(','), m = marks.get(key) || { box: d.box, label: d.label, id: null, notes: [], color: a.color, prio: 0 };
           if (m.id === null && d.confirmed) m.id = d.track_id;
-          const note = (unacc && d.confirmed ? (d.alone ? ' alone' : ' with person') : '') + (d.note || '');
+          const note = (unacc && d.confirmed && d.alone ? ' alone' : '') + (d.note || '');
           if (note && !m.notes.includes(note)) m.notes.push(note);
-          const prio = (unacc && d.confirmed && d.alone) || d.flag ? 2 : unacc && d.confirmed ? 1 : 0;
+          // red: alone, or still for too long. Blue: a companion is near. Otherwise the analytic's colour
+          const prio = (unacc && d.confirmed && d.alone) || d.flag ? 2 : d.with ? 1 : 0;
           if (prio > m.prio) { m.prio = prio; m.color = prio === 2 ? '#eb3c3c' : '#3c8cfa'; }
           marks.set(key, m);
         }
         if (a.loading) { g.fillStyle = 'rgba(0,0,0,.6)'; g.fillRect(0, 0, w, 24); g.fillStyle = '#fff'; g.fillText('Loading the detector (first time only)...', 8, 16); }
       }
+      g.font = '13px system-ui';
+      counters.forEach(([a, text], k) => {                       // line counters in the top-left corner, where they do not move
+        const tw = g.measureText(text).width, x = 8, y = 8 + k * 24;
+        g.fillStyle = 'rgba(20,20,20,.85)'; g.fillRect(x, y, tw + 22, 18); g.fillStyle = a.color; g.fillRect(x + 4, y + 5, 8, 8);
+        g.fillStyle = '#fff'; g.fillText(text, x + 16, y + 13); placed.push([x, y, x + tw + 22, y + 18]);
+      });
+      const PACK = '#faa028', pad = b => [Math.max(0, b[0] - 10), Math.max(0, b[1] - 10), Math.min(w - 1, b[2] + 10), Math.min(h - 1, b[3] + 10)];
       g.lineWidth = 2; g.font = '13px system-ui';
-      for (const m of marks.values()) {
-        const [x1, y1, x2, y2] = m.box; g.strokeStyle = m.color; g.strokeRect(x1, y1, x2 - x1, y2 - y1);
-        const text = `${m.label}${m.id !== null ? ' #' + m.id : ''}${m.notes.join(',')}`, tw = g.measureText(text).width;
-        g.fillStyle = m.color; g.fillRect(x1, Math.max(0, y1 - 18), tw + 8, 18); g.fillStyle = '#0d1115'; g.fillText(text, x1 + 4, Math.max(13, y1 - 5));
-      }
+      packs.forEach(([b]) => { const [x1, y1, x2, y2] = pad(b); g.strokeStyle = PACK; g.strokeRect(x1, y1, x2 - x1, y2 - y1); });
+      for (const m of marks.values()) { const [x1, y1, x2, y2] = m.box; g.strokeStyle = m.color; g.strokeRect(x1, y1, x2 - x1, y2 - y1); }
+      [...marks.values()].sort((p, q) => q.prio - p.prio || (p.id ?? 0) - (q.id ?? 0)).forEach(m => tag(`${m.label}${m.id !== null ? ' #' + m.id : ''}${m.notes.join('')}`, ...m.box, m.color));   // important labels get the free spots
+      packs.forEach(([b, n]) => { const [x1, y1, x2, y2] = pad(b); tag(`pack of ${n}`, x1, y1, x2, y2, PACK); });
       g.fillStyle = '#fff'; g.font = '12px system-ui'; g.fillText(new Date().toLocaleString(), 8, h - 8);
     }
     alert(a, fired) {
